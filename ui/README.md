@@ -1,0 +1,1 @@
+# This project is a Next.js application that serves as the user interface for the PGS Search Engine. It provides a responsive and interactive front-end experience for users to search and explore data.

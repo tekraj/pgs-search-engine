@@ -1,0 +1,1 @@
+# Create proper data models with proper ERD diagrams and relationships. Use SQLAlchemy for ORM and Pydantic for data validation. Ensure that the models are well-structured and follow best practices for database design.
