@@ -71,3 +71,40 @@ When a geo-filtered query is received via gRPC (e.g., bounded to `district_code=
 ---
 
 ---
+## 4. Image Ingestion
+
+Images are made searchable by turning each one into a `SearchDocument`
+(`content_type="image"`) and indexing it into the same `np_web_pages`
+index used for everything else — no changes needed to the BM25 query
+path (`retrieval/lexical.py`) to pick them up.
+
+Two signals are combined into `searchable_text`:
+1. **OCR** (Tesseract, `nep+eng`) — text baked into the image itself
+   (scanned notices, screenshots, infographics).
+2. **Metadata from scraper/ETL**, when available — `alt_text`,
+   `surrounding_context`, `parent_page_url`. Falls back gracefully if
+   an image has no embedded text or no metadata.
+
+Modules:
+- `src/pgs_search/ingestion/image_indexer.py` — OCR + document-building
+  (pure functions, no CLI, no OpenSearch client of its own — reuses
+  `client/opensearch.py` and `config.settings`).
+- `scripts/index_images.py` — CLI entry point, same pattern as
+  `scripts/seed_demo_data.py`.
+
+**Setup:**
+```bash
+pip install -e .            # pulls in pytesseract + Pillow from pyproject.toml
+sudo apt-get install tesseract-ocr tesseract-ocr-nep
+tesseract --list-langs      # confirm 'nep' is listed
+```
+
+**Run:**
+```bash
+python scripts/index_images.py --images-dir ./data/images
+# with scraper/ETL metadata:
+python scripts/index_images.py --images-dir ./data/images \
+    --metadata-json ./data/image_metadata.json
+```
+
+---
