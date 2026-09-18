@@ -25,6 +25,9 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+pgs_search = ["query/data/*.json"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 
