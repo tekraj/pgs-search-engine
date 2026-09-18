@@ -1,7 +1,7 @@
 from pgs_search.query.normalizer import (
-    EN_NE_PLACE_MAP,
     detect_language,
     expand_query_terms,
+    get_place_map,
     normalize_query,
 )
 
@@ -75,6 +75,14 @@ def test_expand_query_terms_adds_nepali_place():
     assert "काठमाडौं" in terms
 
 
+def test_get_place_map_loads_json():
+    place_map = get_place_map()
+
+    assert isinstance(place_map, dict)
+    assert place_map
+    assert place_map["kathmandu"] == "काठमाडौं"
+
+
 def test_expand_nepali_place_adds_english():
     terms = expand_query_terms("काठमाडौं")
     assert "काठमाडौं" in terms
@@ -82,9 +90,10 @@ def test_expand_nepali_place_adds_english():
 
 
 def test_expand_all_places_have_equivalents():
-    for name in EN_NE_PLACE_MAP:
+    place_map = get_place_map()
+    for name in place_map:
         terms = expand_query_terms(name)
-        assert EN_NE_PLACE_MAP[name] in terms
+        assert place_map[name] in terms
 
 
 def test_expand_query_terms_no_match_returns_original_only():
