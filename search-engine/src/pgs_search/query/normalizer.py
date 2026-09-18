@@ -1,82 +1,49 @@
 """Query normalization helpers for the search engine."""
 
+import json
 import re
 import unicodedata
+from functools import lru_cache
+from pathlib import Path
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _DEVANAGARI_RE = re.compile(r"[\u0900-\u097F]")
 
-EN_NE_PLACE_MAP: dict[str, str] = {
-    "kathmandu": "काठमाडौं",
-    "pokhara": "पोखरा",
-    "lalitpur": "ललितपुर",
-    "patan": "पाटन",
-    "bhaktapur": "भक्तपुर",
-    "bharatpur": "भरतपुर",
-    "biratnagar": "विराटनगर",
-    "birgunj": "वीरगञ्ज",
-    "janakpur": "जनकपुर",
-    "hetauda": "हेटौडा",
-    "butwal": "बुटवल",
-    "dharan": "धरान",
-    "nepalgunj": "नेपालगञ्ज",
-    "itahari": "इटहरी",
-    "gorkha": "गोरखा",
-    "chitwan": "चितवन",
-    "lumbini": "लुम्बिनी",
-    "mustang": "मुस्ताङ",
-    "manang": "मनाङ",
-    "jomsom": "जोमसोम",
-    "ilam": "इलाम",
-    "kirtipur": "कीर्तिपुर",
-    "dhulikhel": "धुलिखेल",
-    "banepa": "बनेपा",
-    "bandipur": "बन्दीपुर",
-    "thamel": "ठमेल",
-    "nagarkot": "नगरकोट",
-    "namche bazaar": "नाम्चे बजार",
-    "everest": "सगरमाथा",
-    "sagarmatha": "सगरमाथा",
-    "annapurna": "अन्नपूर्ण",
-    "dhaulagiri": "धौलागिरी",
-    "makalu": "मकालु",
-    "langtang": "लाङटाङ",
-    "rara": "रारा",
-    "swayambhunath": "स्वयम्भूनाथ",
-    "pashupatinath": "पशुपतिनाथ",
-    "boudhanath": "बौद्धनाथ",
-    "sauraha": "सौराहा",
-    "tansen": "तानसेन",
-    "lumle": "लुम्ले",
-    "syangja": "स्याङ्जा",
-    "palpa": "पाल्पा",
-    "kavre": "काभ्रे",
-    "nuwakot": "नुवाकोट",
-    "dolpa": "डोल्पा",
-    "jumla": "जुम्ला",
-}
+_PLACE_MAP_FILE = Path(__file__).parent / "data" / "en_ne_places.json"
 
-_NE_EN_PLACE_MAP: dict[str, str] = {value: key for key, value in EN_NE_PLACE_MAP.items()}
 
-_ROMANIZED_NE_WORDS: set[str] = set(EN_NE_PLACE_MAP) | {
-    "namaste",
-    "dhanyavad",
-    "dhanyabad",
-    "khana",
-    "pani",
-    "momo",
-    "momos",
-    "chowmein",
-    "thakali",
-    "newa",
-    "sherpa",
-    "tamang",
-    "gurung",
-    "magar",
-    "limbu",
-    "tharu",
-    "nepali",
-}
+@lru_cache(maxsize=1)
+def get_place_map() -> dict[str, str]:
+    with _PLACE_MAP_FILE.open(encoding="utf-8") as file:
+        return json.load(file)
+
+
+@lru_cache(maxsize=1)
+def get_reverse_place_map() -> dict[str, str]:
+    return {value: key for key, value in get_place_map().items()}
+
+
+@lru_cache(maxsize=1)
+def get_romanized_ne_words() -> frozenset[str]:
+    return frozenset(get_place_map()) | {
+        "namaste",
+        "dhanyavad",
+        "dhanyabad",
+        "khana",
+        "pani",
+        "momo",
+        "momos",
+        "chowmein",
+        "thakali",
+        "newa",
+        "sherpa",
+        "tamang",
+        "gurung",
+        "magar",
+        "limbu",
+        "tharu",
+        "nepali",
+    }
 
 
 def _is_latin_script(text: str) -> bool:
@@ -125,19 +92,21 @@ def detect_language(query: str) -> str:
 
 
 def _is_romanized_nepali(text: str) -> bool:
-    if text in EN_NE_PLACE_MAP or text in _ROMANIZED_NE_WORDS:
+    if text in get_place_map() or text in get_romanized_ne_words():
         return True
     tokens = text.split()
-    return bool(tokens) and all(token in _ROMANIZED_NE_WORDS for token in tokens)
+    return bool(tokens) and all(token in get_romanized_ne_words() for token in tokens)
 
 
 def expand_query_terms(query: str) -> list[str]:
     """Expand a query into search terms and variants."""
     normalized = normalize_query(query)
     terms = [normalized]
+    place_map = get_place_map()
+    reverse_place_map = get_reverse_place_map()
     candidates = [normalized, *normalized.split()]
     for candidate in candidates:
-        equivalent = EN_NE_PLACE_MAP.get(candidate) or _NE_EN_PLACE_MAP.get(candidate)
+        equivalent = place_map.get(candidate) or reverse_place_map.get(candidate)
         if equivalent:
             terms.append(equivalent)
     return list(dict.fromkeys(terms))
