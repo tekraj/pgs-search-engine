@@ -70,4 +70,25 @@ When a geo-filtered query is received via gRPC (e.g., bounded to `district_code=
 
 ---
 
+## 4. Repository Layout
+
+```
+search-engine/
+├── go.mod
+├── Makefile
+├── cmd/searchengine/       # entrypoint (main.go)
+├── internal/
+│   ├── config/             # env/config.yaml loading
+│   ├── indexer/            # Kafka consumer -> OpenSearch bulk ingestion
+│   ├── query/              # LangID, Devanagari normalizer, BM25 candidate fetch
+│   ├── ranker/              # stage-2 re-rank feature extraction + Go<->Python bridge
+│   └── grpcserver/         # SearchService gRPC implementation
+├── proto/
+│   └── search_engine.proto # gRPC contract shared with the API Gateway
+└── python/reranker/        # LightGBM re-ranking model
+```
+
+Build work here is split across a 6-person team, 10 commits each — ask
+whoever set up the project for the task-split checklist.
+
 ---
