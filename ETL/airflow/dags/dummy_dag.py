@@ -16,10 +16,8 @@ with DAG(
         task_id="say_hello",
         bash_command="echo 'Hello from Airflow - setup is working.'",
     )
-
     say_goodbye = BashOperator(
         task_id="say_goodbye",
         bash_command="echo 'Task 2 complete - dummy DAG finished successfully.'",
     )
-
     say_hello >> say_goodbye
