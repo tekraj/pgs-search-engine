@@ -1,0 +1,2 @@
+ETL/airflow/logs/*
+!ETL/airflow/logs/.gitkeep
