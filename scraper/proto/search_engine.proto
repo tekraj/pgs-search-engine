@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package search.engine.v1;
 
-option go_package = "github.com/tekraj/pgs-search-engine/search-engine/proto;enginev1";
+option go_package = "github.com/tekraj/pgs-search-engine/scraper/proto;enginev1";
 
 // SearchService is the internal gRPC contract consumed by the FastAPI API
 // Gateway. Mirrors api/README.md section 5. Person 6 owns finalizing these
