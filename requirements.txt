@@ -8,7 +8,7 @@ h11==0.16.0
 httptools==0.8.0
 idna==3.19
 nodeenv==1.10.0
--e git+https://github.com/tekraj/pgs-search-engine.git@97f353571140dbaf22e664477d4339da31cf020a#egg=pgs_db&subdirectory=database
+-e ./database
 pydantic==2.13.5
 pydantic_core==2.46.5
 pyright==1.1.414
