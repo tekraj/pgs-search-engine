@@ -1,6 +1,6 @@
 This is to test the new branch 'etl_main'
 
-'aashik' branch added
+'opensearch_etl' branch added
 'sarbagya_etl' branch added
 'arun_etl' branch added
 'ujjwal_etl' branch added
