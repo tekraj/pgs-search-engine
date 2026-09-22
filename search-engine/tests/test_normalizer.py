@@ -2,6 +2,7 @@ from pgs_search.query.normalizer import (
     detect_language,
     expand_query_terms,
     get_place_map,
+    lemmatize_query,
     normalize_query,
 )
 
@@ -96,8 +97,10 @@ def test_expand_all_places_have_equivalents():
         assert place_map[name] in terms
 
 
-def test_expand_query_terms_no_match_returns_original_only():
-    assert expand_query_terms("himalayan trails") == ["himalayan trails"]
+def test_expand_query_terms_keeps_original_and_adds_stemmed_variant():
+    terms = expand_query_terms("himalayan trails")
+    assert terms[0] == "himalayan trails"
+    assert len(terms) == 2
 
 
 def test_expand_mixed_language_query():
@@ -109,3 +112,17 @@ def test_expand_mixed_language_query():
 def test_expand_empty_query():
     assert expand_query_terms("") == [""]
     assert expand_query_terms("   ") == [""]
+
+
+def test_lemmatize_stems_english_words():
+    assert lemmatize_query("running") == "run"
+
+
+def test_lemmatize_preserves_nepali_unchanged():
+    assert lemmatize_query("काठमाडौं") == "काठमाडौं"
+
+
+def test_expand_query_terms_includes_stemmed_variant():
+    terms = expand_query_terms("running")
+    assert "running" in terms
+    assert "run" in terms

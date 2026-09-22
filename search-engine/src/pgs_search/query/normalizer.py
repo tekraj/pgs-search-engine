@@ -6,6 +6,8 @@ import unicodedata
 from functools import lru_cache
 from pathlib import Path
 
+from nltk.stem import PorterStemmer
+
 _WHITESPACE_RE = re.compile(r"\s+")
 _DEVANAGARI_RE = re.compile(r"[\u0900-\u097F]")
 
@@ -70,6 +72,19 @@ def normalize_query(query: str) -> str:
     return normalized
 
 
+def lemmatize_query(text: str) -> str:
+    """Stem English words in a query, preserving non-Latin tokens.
+
+    Nepali lemmatization is out of scope because it requires a
+    Nepali-specific morphological analyzer.
+    """
+    stemmer = PorterStemmer()
+    return " ".join(
+        stemmer.stem(token) if _is_latin_script(token) else token
+        for token in text.split()
+    )
+
+
 def detect_language(query: str) -> str:
     """Detect the language used by a search query."""
     text = normalize_query(query)
@@ -102,9 +117,12 @@ def expand_query_terms(query: str) -> list[str]:
     """Expand a query into search terms and variants."""
     normalized = normalize_query(query)
     terms = [normalized]
+    stemmed = lemmatize_query(normalized)
+    if stemmed != normalized:
+        terms.append(stemmed)
     place_map = get_place_map()
     reverse_place_map = get_reverse_place_map()
-    candidates = [normalized, *normalized.split()]
+    candidates = [normalized, stemmed, *normalized.split()]
     for candidate in candidates:
         equivalent = place_map.get(candidate) or reverse_place_map.get(candidate)
         if equivalent:
