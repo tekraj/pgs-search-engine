@@ -31,6 +31,7 @@ def search_bm25(
                             "query": variant,
                             "fields": _SEARCH_FIELDS,
                             "type": "best_fields",
+                            "fuzziness": "AUTO",
                         }
                     }
                     for variant in variants
