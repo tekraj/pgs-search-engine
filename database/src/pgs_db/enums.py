@@ -46,3 +46,33 @@ class LocalBodyType(enum.StrEnum):
     SUB_METROPOLITAN_CITY = "SUB_METROPOLITAN_CITY"
     MUNICIPALITY = "MUNICIPALITY"
     RURAL_MUNICIPALITY = "RURAL_MUNICIPALITY"
+
+
+class ContactType(enum.StrEnum):
+    """Kind of contact detail extracted from a page.
+
+    Mirrors the three contact sources Bronze already carries on
+    `crawled_documents`: `emails`, `phones` and `social_links`.
+    """
+
+    EMAIL = "EMAIL"
+    PHONE = "PHONE"
+    SOCIAL = "SOCIAL"
+
+
+class Language(enum.StrEnum):
+    """Dominant language of a page's body text."""
+
+    NE = "NE"
+    EN = "EN"
+    MIXED = "MIXED"
+    OTHER = "OTHER"
+
+
+class GeoTagMethod(enum.StrEnum):
+    """How a geo tag was resolved against the gazetteer."""
+
+    GAZETTEER = "GAZETTEER"  # place name matched in body text
+    NER = "NER"  # named-entity recognition
+    DOMAIN = "DOMAIN"  # the site itself belongs to a local body
+    GEO_META = "GEO_META"  # geo.* meta tags / structured data

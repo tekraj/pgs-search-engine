@@ -1,7 +1,7 @@
 """Pydantic request/response schemas.
 
-Phase 1 covers the Bronze tables plus the province reference schemas; district,
-local-body and Silver/Gold schemas are still to come.
+Phase 1 covers the Bronze tables plus the province reference schemas; Phase 2 adds
+the Silver tables. District, local-body and Gold schemas are still to come.
 """
 
 from .base import ReadSchema, SchemaBase
@@ -23,6 +23,19 @@ from .bronze import (
     StoredFileRead,
 )
 from .geography import ProvinceBase, ProvinceCreate, ProvinceRead, ProvinceUpdate
+from .silver import (
+    GeoLocationOut,
+    PageBase,
+    PageContactBase,
+    PageContactCreate,
+    PageContactRead,
+    PageCreate,
+    PageGeoTagBase,
+    PageGeoTagCreate,
+    PageGeoTagRead,
+    PageRead,
+    PageWithRelations,
+)
 
 __all__ = [
     "ReadSchema",
@@ -46,6 +59,18 @@ __all__ = [
     "StoredFileBase",
     "StoredFileCreate",
     "StoredFileRead",
+    # silver
+    "PageBase",
+    "PageCreate",
+    "PageRead",
+    "PageWithRelations",
+    "PageGeoTagBase",
+    "PageGeoTagCreate",
+    "PageGeoTagRead",
+    "PageContactBase",
+    "PageContactCreate",
+    "PageContactRead",
+    "GeoLocationOut",
     # geography
     "ProvinceBase",
     "ProvinceCreate",

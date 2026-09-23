@@ -2,7 +2,7 @@
 
 We design and manage the PostgreSQL database that the scraper, ETL, search engine and API all share.
 
-**Status:** Bronze layer and reference tables are built and migrated. Silver, Gold and the
+**Status:** Bronze, Silver and the reference tables are built and migrated. Gold and the
 operational tables are still to come — see [§5](#5-table-status).
 
 ---
@@ -40,7 +40,7 @@ We use three layers:
 |---|---|---|---|
 | **Bronze** | Raw: a record of every crawl and every downloaded file, unchanged | `crawl_runs`, `crawled_documents`, `stored_files` | **Built** |
 | | | `quarantined_files` | Planned |
-| **Silver** | Clean: one record per page, duplicates removed, location tagged | `pages`, `page_geo_tags`, `page_contacts` | Planned |
+| **Silver** | Clean: one record per page, duplicates removed, location tagged | `pages`, `page_geo_tags`, `page_contacts` | **Built** |
 | **Gold** | Ready to use: summaries for the map and dashboard | `district_stats`, `domain_stats` | Planned |
 
 Plus **reference tables** that everything links to:
@@ -51,7 +51,7 @@ Plus **reference tables** that everything links to:
 
 ## 4. What is built
 
-One migration is in place: `20260922_95e7b8aa6ec5_create_bronze_and_reference_tables`.
+Two migrations are in place: `95e7b8aa6ec5` (Bronze + reference) and `e529ca38e6ae` (Silver).
 
 | Table | Layer | Written by | Read by | Mirrors |
 |---|---|---|---|---|
@@ -89,9 +89,9 @@ works.
 | `districts` | Reference | Built, seeded (77) |
 | `local_bodies` | Reference | Built, seeded (753) |
 | `quarantined_files` | Bronze | Not built — ClamAV quarantine log |
-| `pages` | Silver | Not built — ETL output |
-| `page_geo_tags` | Silver | Not built — province/district/municipality/ward per page |
-| `page_contacts` | Silver | Not built — emails, phones, socials per page |
+| `pages` | Silver | Built — ETL output |
+| `page_geo_tags` | Silver | Built — province/district/municipality/ward per page |
+| `page_contacts` | Silver | Built — emails, phones, socials per page |
 | `district_stats` | Gold | Not built — page counts for the UI map |
 | `domain_stats` | Gold | Not built — pages scraped/failed per domain |
 | `error_logs` | Ops | Not built — all services write here |
@@ -157,6 +157,10 @@ It takes the scraper's JSON as-is and handles the conversions that JSON needs (`
 flattened). Non-Python services issue the same statements by hand —
 [`docs/scraper-db-contract.md`](docs/scraper-db-contract.md) lists them, along with the columns that must
 always be sent and the duplicate/failure rules.
+
+`pgs_db.SilverRepository` does the same job for the Silver tables, taking the Spark ETL's
+output payload and landing it in `pages`, `page_geo_tags` and `page_contacts` —
+see [`docs/bronze-silver-contract.md`](docs/bronze-silver-contract.md).
 
 ## 6. Rules everyone should follow
 
