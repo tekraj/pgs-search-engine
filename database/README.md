@@ -45,7 +45,7 @@ We use three layers:
 
 Plus **reference tables** that everything links to:
 
-- `provinces` (7), `districts` (77), `local_bodies` (753) — tables built; only the 7 provinces are seeded so far
+- `provinces` (7), `districts` (77), `local_bodies` (753) — built and fully seeded
 - `domains`: the list of websites to crawl — built
 - `admin_users` — planned
 
@@ -86,8 +86,8 @@ works.
 | `stored_files` | Bronze | Built |
 | `domains` | Reference | Built |
 | `provinces` | Reference | Built, seeded (7) |
-| `districts` | Reference | Built, **not seeded** (77 expected) |
-| `local_bodies` | Reference | Built, **not seeded** (753 expected) |
+| `districts` | Reference | Built, seeded (77) |
+| `local_bodies` | Reference | Built, seeded (753) |
 | `quarantined_files` | Bronze | Not built — ClamAV quarantine log |
 | `pages` | Silver | Not built — ETL output |
 | `page_geo_tags` | Silver | Not built — province/district/municipality/ward per page |
@@ -97,16 +97,66 @@ works.
 | `error_logs` | Ops | Not built — all services write here |
 | `admin_users` | Ops | Not built — API auth |
 
+### Reference data (the gazetteer)
+
+`data/nepal_geography.json` holds all 837 rows and is committed, so seeding needs no network.
+`scripts/seed_geography.py` upserts it on `code`, so it is safe to re-run.
+
+Source: [sagautam5/local-states-nepal](https://github.com/sagautam5/local-states-nepal). Counts
+match the official split exactly — 6 metropolitan, 11 sub-metropolitan, 276 municipalities,
+460 rural municipalities = 753.
+
+**Codes are assigned by this project**, not taken from an official registry:
+
+| Level | Format | Example |
+|---|---|---|
+| Province | `P1`–`P7` | `P4` = Gandaki |
+| District | `D01`–`D77` | `D38` = Kaski |
+| Local body | `MUN001`–`MUN753` | `MUN414` = Pokhara Metropolitan City |
+
+Districts and local bodies are numbered by the source dataset's own ordering (grouped by province,
+then alphabetically). **This is the contract for `GeoLocation.district_code` and
+`municipality_id`** — if the search or ETL team needs a different scheme, raise it before the
+gazetteer is used in anger, because changing it later means re-tagging every page.
+
+> Note: `ETL/README.md` §5.2 uses `D39` for Kaski in its worked example. In the seeded data Kaski
+> is `D38` and `D39` is Lamjung. The ETL example was illustrative; the seeded values are the ones
+> to code against.
+
+Two known gaps in the reference data: `local_bodies.phone`, `.email` and `.address` are empty
+(only `website` is populated, for all 753), and the source's ward counts are carried in the JSON
+but not loaded, since the table has no ward-count column.
+
 Also outstanding:
 
-- **Geo seed data** — the gazetteer (77 districts, 753 local bodies, with Devanagari names) that
-  the ETL's geo-tagging stage and the search team's `GeoLocation` both depend on.
-- **Pydantic schemas** — `src/pgs_db/schemas/` is still empty.
+- **Pydantic schemas** — `src/pgs_db/schemas/` is still empty here; Biyush is filling it on
+  `biyush/database-schemas` (Province done).
 - **PostGIS boundary geometry** — the container image has PostGIS, but the extension is not yet
   enabled and `local_bodies` has no boundary column. `crawled_documents` carries plain
   `geo_lat` / `geo_lng` for now.
-- **Write contract for non-Python services** — the exact upsert statements the Go scraper's
-  `PostgresWriter` should use.
+
+### Writing the Bronze tables
+
+`pgs_db.BronzeRepository` is the only code that writes `crawl_runs`, `crawled_documents`,
+`stored_files` and `domains`. Python services use it directly:
+
+```python
+from pgs_db import BronzeRepository, make_session_factory
+
+with make_session_factory().begin() as session:
+    repo = BronzeRepository(session)
+    run_id = repo.start_crawl_run(category="government")
+    result = repo.save_document(document_json, crawl_run_id=run_id)
+    if result.duplicate:
+        ...  # same URL and content already stored
+    repo.finish_crawl_run(run_id, stats=crawl_stats)
+```
+
+It takes the scraper's JSON as-is and handles the conversions that JSON needs (`crawl_run_id: 0`
+→ NULL, `omitempty` blanks → NULL, `uint64` simhash → `int64`, nested `geo`/`contact_info`
+flattened). Non-Python services issue the same statements by hand —
+[`docs/scraper-db-contract.md`](docs/scraper-db-contract.md) lists them, along with the columns that must
+always be sent and the duplicate/failure rules.
 
 ## 6. Rules everyone should follow
 
@@ -132,13 +182,13 @@ export DATABASE_URL=postgresql+psycopg://pgs:pgs@localhost:5432/pgs
 # $env:DATABASE_URL="postgresql+psycopg://pgs:pgs@localhost:5432/pgs"
 
 python -m alembic upgrade head        # create all tables
-python scripts/seed_provinces.py      # load the 7 provinces
-python -m pytest                      # 8 tests should pass
+python scripts/seed_geography.py      # 7 provinces, 77 districts, 753 local bodies
+python -m pytest                      # 13 tests should pass
 ```
 
 The tests need a live database: they read `DATABASE_URL` and each test runs in a transaction that
 is rolled back. Without `DATABASE_URL` set, the suite skips rather than fails, so check that
-tests actually ran (`8 passed`), not just that the command exited green.
+tests actually ran (`13 passed`), not just that the command exited green.
 
 Look inside the database:
 
