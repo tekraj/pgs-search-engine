@@ -2,6 +2,8 @@ from pgs_search.query.normalizer import (
     detect_language,
     expand_query_terms,
     get_place_map,
+    lemmatize,
+    lemmatize_nepali_query,
     lemmatize_query,
     normalize_query,
 )
@@ -126,3 +128,38 @@ def test_expand_query_terms_includes_stemmed_variant():
     terms = expand_query_terms("running")
     assert "running" in terms
     assert "run" in terms
+
+
+def test_lemmatize_nepali_empty_input_returns_empty_list():
+    assert lemmatize_nepali_query("") == []
+    assert lemmatize_nepali_query("   ") == []
+
+
+def test_lemmatize_nepali_non_devnagari_input_returns_empty_list():
+    assert lemmatize_nepali_query("running") == []
+    assert lemmatize_nepali_query("hospital budget") == []
+
+
+def test_lemmatize_dispatches_english_to_porter():
+    assert lemmatize("running") == ["run"]
+    assert lemmatize("himalayan trails") == ["himalayan trail"]
+
+
+def test_lemmatize_nepali_returns_lemma_tokens():
+    lemmas = lemmatize_nepali_query("काठमाडौंमा हामी जान्छौं")
+    assert isinstance(lemmas, list)
+    assert lemmas
+    assert all(isinstance(token, str) for token in lemmas)
+    assert "जानु" in lemmas
+
+
+def test_lemmatize_dispatches_nepali():
+    lemmas = lemmatize("काठमाडौंमा हामी जान्छौं")
+    assert isinstance(lemmas, list)
+    assert "जानु" in lemmas
+
+
+def test_expand_query_terms_adds_nepali_lemmatized_variant():
+    terms = expand_query_terms("काठमाडौंमा हामी जान्छौं")
+    assert "काठमाडौंमा हामी जान्छौं" in terms
+    assert "काठमाडौं जानु" in terms
