@@ -243,6 +243,9 @@ Output is newline-delimited JSON, one `model.Document` per line:
 | `--concurrency` | 0 (auto) | Max pages one workflow run has in flight at once. `0` auto-scales with seed count: `numSeeds*4`, clamped to `[8,256]` — a bigger seed file requests more parallelism without a manual flag per file size. Pass a positive value to override. |
 | `--same-host-only` | true | `true` = stay on each seed's own host; `false` = open crawl, follow links anywhere |
 | `--max-pages-per-domain` | 0 | Cap pages fetched from any single host (0 = unlimited); prevents one fast domain crowding out the rest of `--max-pages` |
+| `--max-concurrent-per-host` | 0 | Cap concurrent in-flight fetches to any single host (0 = unlimited; `--concurrency` alone governs total in-flight fetches) |
+| `--revisit-after` | 0 | Skip (re-)fetching a URL already crawled more recently than this duration (0 = disabled, always fetch; requires `--storage=postgres` on the worker to have any effect) |
+| `--country-filter` | NP | ISO 3166-1 alpha-2 country code: only pages detected as this country are written as documents (others are still fetched and followed for links, just not stored); empty = no filter |
 | `--workflow-id` | derived | Temporal workflow ID (override to control dedup/re-runs) |
 | `--wait` | true | Block until the crawl finishes and print stats |
 | `--temporal-address` | localhost:7233 | Temporal frontend address |
@@ -257,13 +260,16 @@ manifests configure it without a wrapper script.
 
 | Flag | Env var | Default | Meaning |
 |---|---|---|---|
-| `--storage` | `STORAGE` | ndjson | `ndjson` (local file) or `postgres` |
+| `--storage` | `STORAGE` | ndjson | `ndjson` (local file), `postgres`, or `kafka` |
 | `--output` | `OUTPUT` | data/output/documents.ndjson | NDJSON output path (used when `--storage=ndjson`) |
 | `--database-url` | `DATABASE_URL` | | Postgres connection string (required when `--storage=postgres`) |
+| `--kafka-brokers` | `KAFKA_BROKERS` | | Comma-separated Kafka broker addresses (required when `--storage=kafka`) |
+| `--kafka-topic` | `KAFKA_TOPIC` | crawled-documents | Kafka topic crawled documents are published to (used when `--storage=kafka`) — the hand-off point to the ETL pipeline |
 | `--max-concurrent-activities` | `MAX_CONCURRENT_ACTIVITIES` | `NumCPU * 100` | Concurrent activity goroutines in this process |
 | `--max-bandwidth-bytes-per-sec` | `MAX_BANDWIDTH_BYTES_PER_SEC` | 0 (unlimited) | Caps this worker process's aggregate download rate in bytes/sec, across every concurrent fetch it's running |
 | `--timeout` | `TIMEOUT` | 10s | Per-request HTTP timeout |
 | `--user-agent` | `USER_AGENT` | search-engine-scraper | UA string + robots.txt group to obey |
+| `--metrics-address` | `METRICS_ADDRESS` | :9090 | Address to serve Prometheus metrics on (`GET /metrics`); empty disables it |
 | `--temporal-address` | `TEMPORAL_ADDRESS` | localhost:7233 | Temporal frontend address |
 | `--namespace` | `NAMESPACE` | default | Temporal namespace |
 
@@ -306,7 +312,7 @@ proportionally, same as `--max-concurrent-activities`.
 
 With `--storage=postgres`
 that scaling is safe by construction: every replica upserts into the same
-table keyed by `(normalized_url, content_hash)`, so N workers writing
+table keyed by `normalized_url`, so N workers writing
 concurrently can't produce duplicate rows (see "Database" below) — the
 NDJSON writer, by contrast, is one file per worker process and isn't
 meant to be run with multiple replicas pointed at the same path.
@@ -318,7 +324,9 @@ is simplest. For anything with more than one worker replica — Docker
 Compose's `--scale`, or a Kubernetes Deployment — use Postgres
 (`--storage=postgres --database-url=...`) instead: every replica writes to
 the same table, and `WriteDocument` is a real upsert keyed on
-`(normalized_url, content_hash)` (see `migrations/0001_create_documents.up.sql`),
+`normalized_url` (see `migrations/0009_fix_unique_constraint_and_revisit.up.sql`,
+which replaced the original `(normalized_url, content_hash)` constraint —
+see that migration's comment for why),
 so it's genuinely idempotent under Temporal's at-least-once activity
 retries across the whole fleet — not just within one process's lifetime,
 which is the most the NDJSON writer's in-memory dedupe could ever offer
