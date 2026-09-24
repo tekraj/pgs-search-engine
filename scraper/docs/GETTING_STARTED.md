@@ -13,7 +13,7 @@ The fastest path to a running crawl: one command brings up the whole stack
 ## 1. Start everything
 
 ```bash
-cd search-engine-scraper
+cd scraper
 make run
 ```
 
@@ -55,7 +55,7 @@ make scale SCALE=5
 ```
 
 Each replica independently polls Temporal and writes to the same Postgres
-table — the `(normalized_url, content_hash)` unique constraint means
+table — the `normalized_url` unique constraint means
 concurrent replicas can't produce duplicate rows (see `docs/RESILIENCE.md`
 and the main README's "Database" section).
 
