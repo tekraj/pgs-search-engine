@@ -1,5 +1,8 @@
 x-airflow-common: &airflow-common
-  image: apache/airflow:2.10.4-python3.11
+  build: .
+  networks:
+    - default
+    - pgs-etl-dag
   environment:
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
@@ -13,6 +16,7 @@ x-airflow-common: &airflow-common
     - ./plugins:/opt/airflow/plugins
     - ./config:/opt/airflow/config
     - ./data:/opt/airflow/data
+    - ../spark:/opt/airflow/spark_lib:ro
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     postgres:
@@ -103,3 +107,8 @@ services:
 
 volumes:
   postgres-db-volume:
+
+networks:
+  default: {}
+  pgs-etl-dag:
+    external: true
