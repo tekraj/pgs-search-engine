@@ -1,13 +1,16 @@
 from pyspark.sql import SparkSession
 
-spark = SparkSession.builder \
-    .appName("TestSetup") \
-    .master("local[*]") \
+from transform import analyze_text
+
+spark = (
+    SparkSession.builder
+    .appName("TestSetup")
+    .master("local[*]")
     .getOrCreate()
+)
 
-data = [("Alice", 25), ("Bob", 30), ("Charlie", 35)]
-df = spark.createDataFrame(data, ["name", "age"])
-
-df.show()
+sample_text = "This is a dummy notice used to test text extraction in Airflow."
+result = analyze_text(spark, sample_text)
+result.show(truncate=80)
 
 spark.stop()
