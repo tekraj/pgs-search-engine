@@ -6,18 +6,21 @@ Takes the Spark ETL's output payload (`ETL/spark/README.md` §5.2) and lands it 
 Reprocessing is the normal case, not the exception: Spark re-runs, Airflow backfills
 and nightly deep-dedup all re-emit pages that already exist. Every write here is
 keyed so that re-running produces the same rows rather than duplicates.
+
+It also owns the Bronze -> Silver work queue (`claim_bronze` and friends), since the
+ETL is the only consumer of `crawled_documents.processing_status`.
 """
 
-from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from collections.abc import Iterable, Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from ..enums import ContactType
-from ..models import CrawledDocument, LocalBody, Page, PageContact, PageGeoTag
+from ..enums import ContactType, GeoTagMethod, Language, ProcessingStatus
+from ..models import CrawledDocument, Page, PageContact, PageGeoTag
 from ._mapping import blank_to_none, parse_timestamp
 from .bronze import SaveResult
 
@@ -28,15 +31,22 @@ _CONTACT_SOURCES: tuple[tuple[str, ContactType], ...] = (
     ("social_links", ContactType.SOCIAL),
 )
 
+# §5.2 language_detected is a lowercase code; anything unrecognized is OTHER.
+_LANGUAGES: dict[str, Language] = {
+    "ne": Language.NE,
+    "en": Language.EN,
+    "mixed": Language.MIXED,
+}
 
-def derive_document_id(content_hash: str) -> str:
-    """Fallback stable id: same content always yields the same id.
 
-    §5.2 shows `document_id` ("doc_8831a2b") as ETL-supplied. When Spark omits it,
-    this keeps the column populated and stable across reprocessing. If Spark starts
-    sending its own, that value wins.
-    """
-    return f"doc_{content_hash[:12]}"
+def to_language(raw: Any) -> Language:
+    """Map §5.2 `language_detected` ("ne", "en-US", "mixed", ...) to `Language`."""
+    value = blank_to_none(raw)
+    if not isinstance(value, str):
+        return Language.OTHER
+    # "en-US" / "ne_NP" -> the primary subtag.
+    primary = value.strip().lower().replace("_", "-").split("-")[0]
+    return _LANGUAGES.get(primary, Language.OTHER)
 
 
 class SilverRepository:
@@ -48,14 +58,6 @@ class SilverRepository:
 
     def __init__(self, session: Session) -> None:
         self.session = session
-
-    # -------------------------------------------------------------- resolution
-
-    def local_body_id_for_code(self, code: str | None) -> int | None:
-        """Resolve §5.2's `municipality_id` (e.g. MUN414) to `local_bodies.id`."""
-        if not code:
-            return None
-        return self.session.scalar(select(LocalBody.id).where(LocalBody.code == code))
 
     # ------------------------------------------------------------------- pages
 
@@ -71,8 +73,14 @@ class SilverRepository:
     ) -> SaveResult:
         """Upsert one Silver page from an ETL payload, with its geo tags and contacts.
 
-        Keyed on `crawled_document_id`: reprocessing the same Bronze row updates its
-        page in place. `SaveResult.duplicate` is True when the page already existed.
+        Keyed on `canonical_url`: every Bronze version of the same URL lands on one
+        page, which is repointed at the newest Bronze row. `SaveResult.duplicate` is
+        True when the page already existed.
+
+        "Newest" is the highest `crawled_documents.id` -- a content change inserts a
+        new Bronze row, so ids grow with content versions. If an older Bronze row is
+        processed after a newer one (retries, backfills), the page is left untouched
+        rather than rolled back to stale content.
 
         `replace_children` re-derives geo tags and contacts from this payload,
         removing any that are no longer present -- so a reprocess that corrects a
@@ -85,21 +93,32 @@ class SilverRepository:
             content_hash=content_hash,
             sim_hash=sim_hash,
         )
+        # Validate geo blocks before touching the database, so a bad payload fails
+        # without a half-written page.
+        geo_rows = self._geo_rows(payload.get("geo_location")) if replace_children else []
+
         stmt = insert(Page).values(row)
-        updates = {
-            col: getattr(stmt.excluded, col)
-            for col in row
-            if col not in ("crawled_document_id", "document_id")
-        }
+        updates = {col: getattr(stmt.excluded, col) for col in row if col != "canonical_url"}
         result = self.session.execute(
             stmt.on_conflict_do_update(
-                index_elements=[Page.crawled_document_id], set_=updates
+                index_elements=[Page.canonical_url],
+                set_=updates,
+                where=Page.crawled_document_id <= stmt.excluded.crawled_document_id,
             ).returning(Page.id, text("(xmax = 0)"))
-        ).one()
-        saved = SaveResult(id=int(result[0]), inserted=bool(result[1]))
+        ).one_or_none()
 
+        if result is None:
+            # Conflict, but the WHERE refused it: this Bronze row is older than the
+            # one the page already reflects. Nothing to write.
+            page_id = self.session.scalar(
+                select(Page.id).where(Page.canonical_url == row["canonical_url"])
+            )
+            assert page_id is not None
+            return SaveResult(id=int(page_id), inserted=False)
+
+        saved = SaveResult(id=int(result[0]), inserted=bool(result[1]))
         if replace_children:
-            self.replace_geo_tags(saved.id, payload.get("geo_location"))
+            self._replace_geo_rows(saved.id, geo_rows)
             self.replace_contacts(saved.id, payload)
         return saved
 
@@ -114,17 +133,28 @@ class SilverRepository:
     ) -> dict[str, Any]:
         meta = payload.get("extracted_metadata") or {}
 
-        source_url = blank_to_none(payload.get("source_url"))
-        if not source_url:
+        # §5.2 calls it source_url; the column is canonical_url.
+        canonical_url = blank_to_none(payload.get("canonical_url")) or blank_to_none(
+            payload.get("source_url")
+        )
+        if not canonical_url:
             raise ValueError("ETL payload is missing required field 'source_url'")
+
+        # §5.2 calls it searchable_text.
+        body_text = blank_to_none(payload.get("body_text")) or blank_to_none(
+            payload.get("searchable_text")
+        )
+        if not body_text:
+            raise ValueError("ETL payload is missing required field 'searchable_text'")
+        body_text = str(body_text)
 
         resolved_hash = blank_to_none(content_hash) or blank_to_none(payload.get("content_hash"))
         if not resolved_hash:
             raise ValueError("a Silver page needs a content_hash for deduplication")
 
-        document_id = blank_to_none(payload.get("document_id")) or derive_document_id(
-            str(resolved_hash)
-        )
+        word_count = payload.get("word_count")
+        if word_count is None:
+            word_count = len(body_text.split())
 
         published_raw = payload.get("published_at")
         published_at = (
@@ -136,20 +166,23 @@ class SilverRepository:
         return {
             "crawled_document_id": crawled_document_id,
             "domain_id": domain_id,
-            "document_id": str(document_id),
-            "source_url": str(source_url),
+            "canonical_url": str(canonical_url),
             "title": blank_to_none(meta.get("title")),
             "description": blank_to_none(meta.get("description")),
+            "body_text": body_text,
+            "word_count": int(word_count),
             "keywords": meta.get("keywords") or None,
             # §5.2 calls it language_detected; SearchDocument calls it language.
-            "language": blank_to_none(payload.get("language_detected"))
-            or blank_to_none(payload.get("language"))
-            or "unknown",
+            "language": to_language(
+                payload.get("language_detected") or payload.get("language")
+            ),
             "content_type": blank_to_none(payload.get("content_type")) or "web_page",
             "published_at": published_at,
             "content_hash": str(resolved_hash),
             "sim_hash": sim_hash if sim_hash is not None else payload.get("sim_hash"),
-            "processing_error": blank_to_none(payload.get("processing_error")),
+            # New or changed content has to be (re)indexed.
+            "processing_status": ProcessingStatus.UNPROCESSED,
+            "processing_error": None,
         }
 
     def mark_duplicate_of(self, page_id: int, canonical_page_id: int) -> None:
@@ -171,6 +204,11 @@ class SilverRepository:
         Accepts one block (§5.2) or a list, since a news article can legitimately be
         about several places. Codes are stored; names come from the gazetteer.
         """
+        return self._replace_geo_rows(page_id, self._geo_rows(geo))
+
+    def _geo_rows(
+        self, geo: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None
+    ) -> list[dict[str, Any]]:
         blocks: Sequence[Mapping[str, Any]]
         if geo is None:
             blocks = []
@@ -178,17 +216,13 @@ class SilverRepository:
             blocks = [geo]
         else:
             blocks = list(geo)
+        return [row for block in blocks if (row := self._geo_row(block)) is not None]
 
-        rows: list[dict[str, Any]] = []
-        for block in blocks:
-            row = self._geo_row(page_id, block)
-            if row is not None:
-                rows.append(row)
-
+    def _replace_geo_rows(self, page_id: int, rows: list[dict[str, Any]]) -> list[int]:
         self.session.execute(delete(PageGeoTag).where(PageGeoTag.page_id == page_id))
         if not rows:
             return []
-        stmt = insert(PageGeoTag).values(rows)
+        stmt = insert(PageGeoTag).values([{"page_id": page_id, **row} for row in rows])
         saved = self.session.execute(
             stmt.on_conflict_do_nothing(
                 constraint="uq_page_geo_tags_page_location"
@@ -196,27 +230,44 @@ class SilverRepository:
         ).scalars()
         return list(saved)
 
-    def _geo_row(self, page_id: int, block: Mapping[str, Any]) -> dict[str, Any] | None:
-        local_body_id = block.get("local_body_id")
-        if local_body_id is None:
-            local_body_id = self.local_body_id_for_code(
-                blank_to_none(block.get("municipality_id"))
-            )
-
+    def _geo_row(self, block: Mapping[str, Any]) -> dict[str, Any] | None:
         province_code = blank_to_none(block.get("province_code"))
         district_code = blank_to_none(block.get("district_code"))
-        if province_code is None and district_code is None and local_body_id is None:
+        # §5.2 calls it municipality_id; it is local_bodies.code (e.g. MUN414).
+        local_body_code = blank_to_none(block.get("local_body_code")) or blank_to_none(
+            block.get("municipality_id")
+        )
+        if province_code is None and district_code is None and local_body_code is None:
             # Nothing resolved -- the CHECK would reject it, so skip rather than fail:
             # an untagged page is normal, not an error.
             return None
 
+        # A resolved tag must say how it was resolved and how sure the ETL is.
+        # No defaults: a silently-invented confidence would poison ranking.
+        raw_method = blank_to_none(block.get("method"))
+        if raw_method is None:
+            raise ValueError("geo tag is missing required field 'method'")
+        try:
+            method = GeoTagMethod(str(raw_method).upper())
+        except ValueError:
+            raise ValueError(f"unknown geo tag method {raw_method!r}") from None
+
+        raw_confidence = block.get("confidence")
+        if raw_confidence is None:
+            raise ValueError("geo tag is missing required field 'confidence'")
+        confidence = float(raw_confidence)
+        if not 0.0 <= confidence <= 1.0:
+            raise ValueError(f"geo tag confidence must be within 0..1, got {confidence}")
+
         ward = block.get("ward_number")
         return {
-            "page_id": page_id,
             "province_code": province_code,
             "district_code": district_code,
-            "local_body_id": local_body_id,
+            "local_body_code": local_body_code,
             "ward_number": int(ward) if ward is not None else None,
+            "method": method,
+            "confidence": confidence,
+            "mention_text": blank_to_none(block.get("mention_text")),
         }
 
     # --------------------------------------------------------------- contacts
@@ -257,19 +308,80 @@ class SilverRepository:
         ).scalars()
         return list(saved)
 
-    # --------------------------------------------------------------- backlog
+    # ------------------------------------------------------ bronze work queue
 
-    def unprocessed_bronze_documents(self, limit: int = 100) -> list[CrawledDocument]:
-        """Bronze rows with no Silver page yet -- the ETL's work queue."""
-        return list(
-            self.session.scalars(
-                select(CrawledDocument)
-                .outerjoin(Page, Page.crawled_document_id == CrawledDocument.id)
-                .where(Page.id.is_(None))
-                .order_by(CrawledDocument.fetched_at)
-                .limit(limit)
-            )
+    def claim_bronze(self, limit: int = 100) -> list[CrawledDocument]:
+        """Claim up to `limit` UNPROCESSED Bronze rows for this worker, oldest first.
+
+        `FOR UPDATE SKIP LOCKED` lets several ETL workers claim concurrently without
+        blocking on or double-claiming each other's rows. Claimed rows move to
+        PROCESSING; commit promptly so other workers stop seeing them as locked
+        candidates. `updated_at` doubles as the claim time for `release_stale`.
+        """
+        candidates = (
+            select(CrawledDocument.id)
+            .where(CrawledDocument.processing_status == ProcessingStatus.UNPROCESSED)
+            .order_by(CrawledDocument.fetched_at, CrawledDocument.id)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
         )
+        claimed = self.session.scalars(
+            update(CrawledDocument)
+            .where(CrawledDocument.id.in_(candidates.scalar_subquery()))
+            .values(
+                processing_status=ProcessingStatus.PROCESSING,
+                processing_error=None,
+                updated_at=func.now(),
+            )
+            .returning(CrawledDocument),
+            execution_options={"synchronize_session": False},
+        ).all()
+        # UPDATE ... RETURNING does not preserve the subquery's order.
+        return sorted(claimed, key=lambda doc: (doc.fetched_at, doc.id))
+
+    def mark_bronze_processed(self, ids: Iterable[int]) -> int:
+        """Mark Bronze rows done after their pages are saved. Returns rows updated."""
+        id_list = list(ids)
+        if not id_list:
+            return 0
+        result = self.session.execute(
+            update(CrawledDocument)
+            .where(CrawledDocument.id.in_(id_list))
+            .values(processing_status=ProcessingStatus.PROCESSED, processing_error=None),
+            execution_options={"synchronize_session": False},
+        )
+        return result.rowcount
+
+    def mark_bronze_failed(self, crawled_document_id: int, error: str) -> None:
+        """Park a Bronze row the ETL could not process, with the reason."""
+        result = self.session.execute(
+            update(CrawledDocument)
+            .where(CrawledDocument.id == crawled_document_id)
+            .values(processing_status=ProcessingStatus.FAILED, processing_error=error),
+            execution_options={"synchronize_session": False},
+        )
+        if result.rowcount == 0:
+            raise LookupError(f"crawled document {crawled_document_id} does not exist")
+
+    def release_stale(self, older_than: timedelta) -> int:
+        """Return PROCESSING claims older than `older_than` to the queue.
+
+        Recovers rows whose worker died after committing its claim. Pick a window
+        well above the slowest batch, or a live worker's rows get double-processed
+        (harmless -- `save_page` is idempotent -- but wasted work).
+        """
+        result = self.session.execute(
+            update(CrawledDocument)
+            .where(
+                CrawledDocument.processing_status == ProcessingStatus.PROCESSING,
+                CrawledDocument.updated_at < func.now() - older_than,
+            )
+            .values(processing_status=ProcessingStatus.UNPROCESSED),
+            execution_options={"synchronize_session": False},
+        )
+        return result.rowcount
+
+    # ------------------------------------------------------ page -> indexer
 
     def page_for_bronze_document(self, crawled_document_id: int) -> Page | None:
         return self.session.scalar(
@@ -280,8 +392,6 @@ class SilverRepository:
         self, page_id: int, *, when: datetime | None = None, error: str | None = None
     ) -> None:
         """Record the outcome of downstream processing (search indexing)."""
-        from ..enums import ProcessingStatus
-
         page = self.session.get(Page, page_id)
         if page is None:
             raise LookupError(f"page {page_id} does not exist")

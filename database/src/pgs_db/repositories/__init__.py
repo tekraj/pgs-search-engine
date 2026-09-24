@@ -8,13 +8,12 @@ from ._mapping import (
     unsigned_simhash,
 )
 from .bronze import BronzeRepository, SaveResult
-from .silver import SilverRepository, derive_document_id
+from .silver import SilverRepository
 
 __all__ = [
     "BronzeRepository",
     "SaveResult",
     "SilverRepository",
-    "derive_document_id",
     "crawl_stats_columns",
     "document_row",
     "signed_simhash",

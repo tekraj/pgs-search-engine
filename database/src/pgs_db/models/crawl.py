@@ -115,6 +115,9 @@ class CrawledDocument(IdMixin, TimestampMixin, Base):
         server_default=ProcessingStatus.UNPROCESSED.value,
         index=True,
     )
+    # Why the Silver ETL failed on this row. Distinct from `error`, which is the
+    # scraper's fetch error. Added by the Silver migration.
+    processing_error: Mapped[str | None] = mapped_column(Text)
 
     crawl_run: Mapped[CrawlRun | None] = relationship(back_populates="documents")
     stored_files: Mapped[list["StoredFile"]] = relationship(back_populates="crawled_document")

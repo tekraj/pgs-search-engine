@@ -13,7 +13,7 @@ from datetime import datetime
 
 from pydantic import Field, model_validator
 
-from ..enums import ContactType, LocalBodyType, ProcessingStatus
+from ..enums import ContactType, GeoTagMethod, Language, LocalBodyType, ProcessingStatus
 from .base import ReadSchema, SchemaBase
 from .bronze import SHA256_PATTERN
 
@@ -44,14 +44,22 @@ class PageGeoTagBase(SchemaBase):
 
     province_code: str | None = Field(default=None, pattern=r"^P[1-7]$")
     district_code: str | None = Field(default=None, pattern=r"^D[0-7][0-9]$")
-    local_body_id: int | None = None
+    local_body_code: str | None = Field(default=None, max_length=16)
     ward_number: int | None = Field(default=None, gt=0)
+
+    method: GeoTagMethod
+    confidence: float = Field(ge=0.0, le=1.0)
+    mention_text: str | None = None
 
     @model_validator(mode="after")
     def _at_least_one_level(self) -> "PageGeoTagBase":
-        if self.province_code is None and self.district_code is None and self.local_body_id is None:
+        if (
+            self.province_code is None
+            and self.district_code is None
+            and self.local_body_code is None
+        ):
             raise ValueError(
-                "a geo tag needs at least one of province_code, district_code, local_body_id"
+                "a geo tag needs at least one of province_code, district_code, local_body_code"
             )
         return self
 
@@ -115,14 +123,9 @@ class GeoLocationOut(SchemaBase):
 
 
 class PageBase(SchemaBase):
-    """Column-shaped view of one Silver page.
+    """Column-shaped view of one Silver page."""
 
-    `searchable_text` is absent by design: full text goes to OpenSearch, and Bronze
-    keeps the extracted text as provenance.
-    """
-
-    document_id: str = Field(min_length=1, max_length=64, description="Stable across reprocessing")
-    source_url: str = Field(min_length=1)
+    canonical_url: str = Field(min_length=1, description="The page's identity")
     content_hash: str = Field(pattern=SHA256_PATTERN)
 
     crawled_document_id: int
@@ -130,8 +133,10 @@ class PageBase(SchemaBase):
 
     title: str | None = None
     description: str | None = None
+    body_text: str = Field(min_length=1)
+    word_count: int = Field(ge=0)
     keywords: list[str] | None = None
-    language: str = Field(default="unknown", max_length=16)
+    language: Language
     content_type: str = Field(default="web_page", max_length=32)
     published_at: datetime | None = None
 
