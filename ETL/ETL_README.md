@@ -32,7 +32,7 @@ Airflow can reach Kafka by container name.
 
 ```bash
 # 1. One-time: create the shared network
-docker network create pgs-etl-net
+docker network create pgs-etl-dag
 
 # 2. Start Kafka
 cd ETL/kafka
