@@ -54,6 +54,10 @@ vet: ## Run go vet and check gofmt formatting.
 	go vet ./...
 	gofmt -l .
 
+.PHONY: lint
+lint: ## Run golangci-lint (see .golangci.yml). Install: https://golangci-lint.run/welcome/install/
+	golangci-lint run ./...
+
 .PHONY: sqlc
 sqlc: ## Regenerate internal/db from internal/db/queries.sql + migrations/*.sql.
 	sqlc generate
