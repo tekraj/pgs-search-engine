@@ -142,3 +142,45 @@ class CrawledDocumentUpdate(SchemaBase):
 
 class CrawledDocumentRead(CrawledDocumentBase, ReadSchema):
     """Crawled-document data returned by the application."""
+
+class StoredFileBase(SchemaBase):
+    """Fields shared by all stored-file schemas."""
+
+    crawled_document_id: int | None = Field(default=None, gt=0)
+    source_page_url: str = Field(
+        min_length=1,
+        description="Page where the stored file was discovered",
+    )
+    document_url: str = Field(
+        min_length=1,
+        description="Original URL of the downloaded file",
+    )
+    storage_path: str = Field(
+        min_length=1,
+        description="Path of the file in MinIO",
+    )
+    content_type: str | None = Field(default=None, max_length=255)
+    sha256: str = Field(
+        pattern=r"^[0-9a-fA-F]{64}$",
+        description="SHA-256 hash used to identify the file",
+    )
+    size_bytes: int = Field(
+        ge=0,
+        description="Size of the downloaded file in bytes",
+    )
+    stored_at: datetime
+    processing_status: ProcessingStatus = ProcessingStatus.UNPROCESSED
+
+
+class StoredFileCreate(StoredFileBase):
+    """Data required when recording a stored file."""
+
+
+class StoredFileUpdate(SchemaBase):
+    """Fields that may be changed while processing a stored file."""
+
+    processing_status: ProcessingStatus | None = None
+
+
+class StoredFileRead(StoredFileBase, ReadSchema):
+    """Stored-file data returned by the application."""
