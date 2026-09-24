@@ -22,7 +22,7 @@ scale: ## Scale worker replicas: make scale SCALE=5
 	docker compose up --build -d --scale worker=$(SCALE)
 
 .PHONY: logs
-logs:
+logs: ## Tail the worker container's logs from the running compose stack.
 	docker compose logs -f worker
 
 .PHONY: crawl
@@ -46,11 +46,11 @@ api: ## Run the documents API + Swagger UI locally against APP_DB_URL. Docs at h
 	DATABASE_URL="$(APP_DB_URL)" go run ./cmd/api
 
 .PHONY: test
-test:
+test: ## Run the Go test suite.
 	go test ./...
 
 .PHONY: vet
-vet:
+vet: ## Run go vet and check gofmt formatting.
 	go vet ./...
 	gofmt -l .
 
@@ -78,7 +78,7 @@ devdb-up: ## Start a standalone local Postgres for `go test`/manual runs against
 	$(MAKE) migrate-up
 
 .PHONY: devdb-down
-devdb-down:
+devdb-down: ## Stop and remove the standalone local Postgres started by `devdb-up`.
 	docker rm -f scraper-devdb
 
 .PHONY: k8s-migrations-configmap
@@ -91,7 +91,7 @@ k8s-apply: k8s-migrations-configmap ## Deploy to the current kubectl context.
 	kubectl apply -f k8s/
 
 .PHONY: k8s-delete
-k8s-delete:
+k8s-delete: ## Tear down everything applied by `k8s-apply` from the current kubectl context.
 	kubectl delete -f k8s/ --ignore-not-found
 
 .PHONY: k8s-crawl
