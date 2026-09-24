@@ -39,23 +39,33 @@ Reference docs before starting:
 Owns: `cmd/api/`, `cmd/scraper/`, `cmd/worker/`, `Dockerfile.*`,
 `docker-compose.yml`, `k8s/`, `Makefile`.
 
-1. Audit `cmd/scraper/main.go` and `cmd/worker/main.go` flag parsing against
+1. [x] Audit `cmd/scraper/main.go` and `cmd/worker/main.go` flag parsing against
    the flag tables in `README.md`; fix any drift between the two
-2. Review `Dockerfile.worker` / `Dockerfile.scraper` / `Dockerfile.api`
+2. [x] Review `Dockerfile.worker` / `Dockerfile.scraper` / `Dockerfile.api`
    multi-stage builds for image size / layer caching improvements
-3. Review `docker-compose.yml` service dependencies (Postgres, Temporal,
+3. [x] Review `docker-compose.yml` service dependencies (Postgres, Temporal,
    worker, api) and healthchecks/wait conditions
-4. Review `k8s/` manifests (Deployment, HPA, StatefulSet, Jobs) for
+4. [x] Review `k8s/` manifests (Deployment, HPA, StatefulSet, Jobs) for
    correctness against current `cmd/worker` flags/env vars
-5. Verify `make scale SCALE=N` and `make down` behave as documented in
+5. [x] Verify `make scale SCALE=N` and `make down` behave as documented in
    `README.md`
-6. Add/verify a CI workflow: `go build ./...`, `go vet ./...`, `go test ./...`
-7. Add/verify `golangci-lint` (or equivalent) config and wire it into `make`
-8. Confirm `cmd/api/main.go` boots the API server independently of the
+6. [x] Add/verify a CI workflow: `go build ./...`, `go vet ./...`, `go test ./...`
+7. [x] Add/verify `golangci-lint` (or equivalent) config and wire it into `make`
+8. [x] Confirm `cmd/api/main.go` boots the API server independently of the
    worker/scraper (no accidental coupling)
-9. Cross-check `Makefile` targets (migrations, sqlc, local dev DB) actually
+9. [x] Cross-check `Makefile` targets (migrations, sqlc, local dev DB) actually
    match what's described in `docs/GETTING_STARTED.md`
-10. Review and merge Person 2–6 branches; resolve structural conflicts
+10. [ ] Review and merge Person 2–6 branches; resolve structural conflicts —
+    **blocked**: none of those branches exist yet in this repo. Do this
+    once Person 2–6 have pushed their own branches; it's a merge/review
+    step, not something to do standalone ahead of their work.
+
+Items 1–9 landed as individual commits on `person1/search-engine-scaffold`
+(one per checklist item, real fixes/additions each time — see that
+branch's log for specifics: flag-table drift, Dockerfile cache mounts,
+a k8s ConfigMap that was silently 9 migrations behind, `make help`
+completeness, a CI workflow + golangci-lint wired in and verified
+0 issues, a `cmd/api` independence guard, and two doc/path drift fixes).
 
 ---
 
