@@ -3,11 +3,12 @@
 # name doesn't change), so `kubectl delete job/migrate` before re-applying
 # if you've added new migration files and want to re-run it.
 #
-# migrations/ isn't baked into any image here -- it's mounted from a
-# ConfigMap generated at apply time. Regenerate it after editing
-# migrations/*.sql with:
+# migrations/ isn't baked into any image here -- it's mounted from the
+# checked-in k8s/04-migrations-configmap.yaml. That file must be
+# regenerated (not hand-edited) after touching any migrations/*.sql file,
+# or this Job silently keeps applying a stale schema:
 #   kubectl create configmap migrations --from-file=../migrations -n search-engine-scraper \
-#     --dry-run=client -o yaml | kubectl apply -f -
+#     --dry-run=client -o yaml > k8s/04-migrations-configmap.yaml
 apiVersion: batch/v1
 kind: Job
 metadata:
