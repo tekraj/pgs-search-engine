@@ -94,3 +94,12 @@ def scan_file(filename: str, content: bytes) -> ScanResult:
         "reasons": reasons,
     }
     
+def scan_file_spark(spark, filename: str, content: bytes):
+    """Same as scan_file(), but wraps the result in a Spark DataFrame -
+    matches the pattern used by analyze_text() in transform.py so both
+    modules look and behave the same way."""
+    result = scan_file(filename, content)
+    result["reasons"] = ", ".join(result["reasons"])  # flatten list for DataFrame
+    df = spark.createDataFrame([result])
+    # put columns in a sensible reading order (Spark would otherwise sort them A-Z)
+    return df.select("filename", "extension", "size_bytes", "sha256", "verdict", "reasons")
