@@ -39,3 +39,7 @@ def get_sha256(content: bytes) -> str:
     a3a8893ea3e12eab2e099103b9af1ebedd80e9b7b812a23909dc4d4d607e1a55
     """
     return hashlib.sha256(content).hexdigest()
+
+def has_double_extension(filename: str) -> bool:
+    parts = filename.split(".")
+    return len(parts) > 2
