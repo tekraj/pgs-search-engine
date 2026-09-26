@@ -108,3 +108,26 @@ if __name__ == "__main__":
     # Quick manual check, no Spark/Docker needed: python3 security_scanner.py
     sample = scan_file("hello.txt", b"This is a normal file used to test the Spark Security Scanner.")
     print(sample)
+
+from pyspark.sql import SparkSession
+
+from security_scanner import scan_file_spark
+
+spark = (
+    SparkSession.builder
+    .appName("SecurityScannerTest")
+    .master("local[*]")
+    .getOrCreate()
+)
+
+# Every file below is 100% harmless. Verdicts are triggered by
+# filename/size patterns only, never by actual malicious content.
+test_files = {
+    "hello.txt": b"This is a normal file used to test the Spark Security Scanner.",
+}
+
+for filename, content in test_files.items():
+    df = scan_file_spark(spark, filename, content)
+    df.show(truncate=60)
+
+spark.stop()
