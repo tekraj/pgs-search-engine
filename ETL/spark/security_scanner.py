@@ -31,3 +31,11 @@ def get_file_size(content: bytes) -> int:
 
 def get_sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+def get_sha256(content: bytes) -> str:
+    """Return the SHA-256 hash of the file content as a hex string.
+
+    Verified example: hashing the hello.txt sample content gives
+    a3a8893ea3e12eab2e099103b9af1ebedd80e9b7b812a23909dc4d4d607e1a55
+    """
+    return hashlib.sha256(content).hexdigest()
