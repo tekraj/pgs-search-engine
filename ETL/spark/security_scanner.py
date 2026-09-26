@@ -103,3 +103,8 @@ def scan_file_spark(spark, filename: str, content: bytes):
     df = spark.createDataFrame([result])
     # put columns in a sensible reading order (Spark would otherwise sort them A-Z)
     return df.select("filename", "extension", "size_bytes", "sha256", "verdict", "reasons")
+
+if __name__ == "__main__":
+    # Quick manual check, no Spark/Docker needed: python3 security_scanner.py
+    sample = scan_file("hello.txt", b"This is a normal file used to test the Spark Security Scanner.")
+    print(sample)
