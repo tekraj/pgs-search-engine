@@ -9,14 +9,30 @@ These validate the *column* shape. The scraper's own JSON (nested `geo` and
 `pgs_db.repositories`; see `docs/scraper-db-contract.md`.
 """
 
+import re
 from datetime import datetime
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from ..enums import CrawlRunStatus, DomainCategory, DomainPriority, DomainStatus, ProcessingStatus
 from .base import ReadSchema, SchemaBase
 
 SHA256_PATTERN = r"^[0-9a-f]{64}$"
+
+DOMAIN_PATTERN = re.compile(
+    r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+"
+    r"[a-zA-Z]{2,63}$"
+)
+
+
+def validate_domain_name(value: str) -> str:
+    """Normalize and validate a hostname such as example.gov.np (from Biyush's branch)."""
+    normalized = value.strip().lower().rstrip(".")
+    if "://" in normalized or "/" in normalized:
+        raise ValueError("domain must be a hostname, not a complete URL")
+    if not DOMAIN_PATTERN.fullmatch(normalized):
+        raise ValueError("invalid domain name")
+    return normalized
 
 
 # ----------------------------------------------------------------------- domains
@@ -34,6 +50,11 @@ class DomainBase(SchemaBase):
     priority: DomainPriority = DomainPriority.NORMAL
     rate_limit_per_sec: int = Field(default=1, gt=0, description="Must be positive (CHECK)")
     local_body_id: int | None = Field(default=None, description="Set for a municipality's own site")
+
+    @field_validator("domain")
+    @classmethod
+    def check_domain(cls, value: str) -> str:
+        return validate_domain_name(value)
 
 
 class DomainCreate(DomainBase):
@@ -204,3 +225,4 @@ class StoredFileRead(StoredFileBase, ReadSchema):
     """Stored-file data returned by the application."""
 
     processing_status: ProcessingStatus = ProcessingStatus.UNPROCESSED
+    processing_error: str | None = None

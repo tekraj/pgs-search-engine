@@ -34,13 +34,17 @@ from OpenSearch, never from this column.
 
 ## 3. How data is organised
 
+The full ER diagram, with what is built and what is planned, is in
+[`docs/erd.md`](docs/erd.md); `pgs_search_engine_full_erd.png` is rendered from it by
+`python scripts/render_erd.py`.
+
 We use three layers:
 
 | Layer | Meaning | Tables | Status |
 |---|---|---|---|
 | **Bronze** | Raw: a record of every crawl and every downloaded file, unchanged | `crawl_runs`, `crawled_documents`, `stored_files` | **Built** |
 | | | `quarantined_files` | Planned |
-| **Silver** | Clean: one record per page, duplicates removed, location tagged | `pages`, `page_geo_tags`, `page_contacts` | **Built** |
+| **Silver** | Clean: one record per page, duplicates removed, location tagged | `pages`, `page_geo_tags`, `page_contacts`, `page_sources`, `page_media`, `entities`, `page_entities`, `page_embeddings` | **Built** |
 | **Gold** | Ready to use: summaries for the map and dashboard | `district_stats`, `domain_stats` | Planned |
 
 Plus **reference tables** that everything links to:
@@ -51,7 +55,9 @@ Plus **reference tables** that everything links to:
 
 ## 4. What is built
 
-Two migrations are in place: `95e7b8aa6ec5` (Bronze + reference) and `e529ca38e6ae` (Silver).
+Four migrations are in place: `95e7b8aa6ec5` (Bronze + reference), `e529ca38e6ae` (Silver),
+`e6aa9e30d49a` (pages built from stored files, `stored_files.processing_error`) and
+`ac08008a1fbf` (the rest of Silver; enables pgvector).
 
 | Table | Layer | Written by | Read by | Mirrors |
 |---|---|---|---|---|
@@ -89,9 +95,13 @@ works.
 | `districts` | Reference | Built, seeded (77) |
 | `local_bodies` | Reference | Built, seeded (753) |
 | `quarantined_files` | Bronze | Not built — ClamAV quarantine log |
-| `pages` | Silver | Built — ETL output |
+| `pages` | Silver | Built — ETL output, from a crawled page or a stored file (PDF, image) |
 | `page_geo_tags` | Silver | Built — province/district/municipality/ward per page |
 | `page_contacts` | Silver | Built — emails, phones, socials per page |
+| `page_sources` | Silver | Built — every Bronze row that fed a page (history) |
+| `page_media` | Silver | Built — images, videos, linked documents, with OCR/parsed text |
+| `entities` / `page_entities` | Silver | Built — people, organizations, events per page |
+| `page_embeddings` | Silver | Built — pgvector, 384 dimensions, HNSW cosine index |
 | `district_stats` | Gold | Not built — page counts for the UI map |
 | `domain_stats` | Gold | Not built — pages scraped/failed per domain |
 | `error_logs` | Ops | Not built — all services write here |
@@ -127,13 +137,62 @@ Two known gaps in the reference data: `local_bodies.phone`, `.email` and `.addre
 (only `website` is populated, for all 753), and the source's ward counts are carried in the JSON
 but not loaded, since the table has no ward-count column.
 
-Also outstanding:
+### What's next (from a review of every branch, refreshed 2026-09-26)
 
-- **Pydantic schemas** — `src/pgs_db/schemas/` is still empty here; Biyush is filling it on
-  `biyush/database-schemas` (Province done).
-- **PostGIS boundary geometry** — the container image has PostGIS, but the extension is not yet
-  enabled and `local_bodies` has no boundary column. `crawled_documents` carries plain
-  `geo_lat` / `geo_lng` for now.
+**This branch (`db`)**
+
+- **Merge `master` in, then open the PR.** Nothing here is usable by other groups until it is
+  on `master`. `db` is one commit behind (`94736bf`, a scraper doc; no conflict expected).
+- **Silver is complete** (migration `ac08008a1fbf`): `page_sources` (fetch history),
+  `page_media` (images/PDFs with OCR text), `entities` + `page_entities` (NER),
+  `page_embeddings` (pgvector, 384 dimensions) and the remaining `pages` columns. The ETL
+  loop is ready-made in `pgs_db.etl`. See
+  [`docs/bronze-silver-contract.md`](docs/bronze-silver-contract.md).
+- **Everyone must rebuild the database image**: `docker compose up -d --build`. The new
+  `Dockerfile` adds pgvector to PostGIS; `alembic upgrade head` fails on the old image
+  (`extension "vector" is not available`). Data volumes are kept.
+- **`biyush/database-schemas` is superseded, and its import is broken.** Its District,
+  LocalBody and domain-hostname validation are now on `db` (`schemas/geography.py`,
+  `schemas/bronze.py`). On his branch, `class LocalBodyBase` is indented inside
+  `DistrictRead`, so `LocalBodyCreate` raises `NameError` on import. Its `crawl.py`
+  duplicates `schemas/bronze.py`. Tell Biyush, and close the branch.
+- **Next to build: Gold.** `geo_content_stats` and `domain_stats` first (the API's map and
+  admin endpoints need them; no PostGIS needed), then enable PostGIS for
+  `search_documents` / `document_geo`.
+
+**Other teams (each one writes to or reads from our tables)**
+
+- **Scraper: two Bronze schemas.** `person1/search-engine-scaffold` now has a working
+  Postgres writer (`scraper/internal/storage/postgres.go`), but against **its own**
+  migrations (`scraper/migrations/0001`–`0010`): a `documents` table instead of
+  `crawled_documents`, a different `crawl_runs` (`fetched`, `seed_count`, ...), no
+  `stored_files`, no `domains`. Its migration 0009 also changed the key to one row per
+  `normalized_url`, updated in place, where ours keeps one row per content version,
+  which `page_sources` and Silver's recrawl logic rely on. The two can't both be Bronze.
+  Proposal: the scraper drops its migrations and writes our tables per
+  [`docs/scraper-db-contract.md`](docs/scraper-db-contract.md), rewriting its `sqlc`
+  queries (`scraper/internal/db/queries.sql`) against them. Its freshness check has an
+  equivalent in `BronzeRepository.last_fetched_at`. This needs a meeting with the scraper
+  team, not a unilateral change.
+- **ETL is waiting on us** (`ETL/kafka/phase1_testing/README.md`: "ETL -> Postgres write
+  path not built yet, pending schema sync with the database team"). Point them at
+  `pgs_db.etl.process_bronze_batch`: they write only the transform (`ETL/spark/transform.py`
+  is still a placeholder). Two things to raise: geo tags need `method` + `confidence`
+  (contract §10 q2); the Kafka consumer still saves to SQLite.
+- **Search: embeddings model.** `pgs_search/query/embeddings.py` (`rabin/grpc-search-service`,
+  `search-engine`) uses `all-MiniLM-L6-v2`, which is English-only, so Nepali pages will embed
+  poorly. `paraphrase-multilingual-MiniLM-L12-v2` is also 384-dimension, so switching needs
+  no migration. Their `pgvector_search.py` queries a `documents` table: point it at
+  `page_embeddings` (`SilverRepository.nearest_chunks` does the query) with geo filters
+  joined through `page_geo_tags`.
+- **Search: `SearchDocument.document_id`** (`feat/image-ingestion`,
+  `shreya/bilingual-query-normalization`) no longer exists; use `pages.id` /
+  `canonical_url`. Image OCR (`feat/image-ingestion`) now has a home: `page_media.extracted_text`.
+- **Seed categories (`omprakash/search-engine-scrapper`) are free text** (`[news]`,
+  `[tech 10]`), but `domains.category` only accepts `DomainCategory` values. Agree on a
+  mapping, and have seeding upsert `domains`.
+- **API geo and crawl-stats endpoints** (`api/README.md` §3.2, admin stats) can be served from
+  `provinces` / `districts` / `local_bodies` and `crawl_runs` today.
 
 ### Writing the Bronze tables
 
@@ -178,7 +237,7 @@ Needs **Docker Desktop** (running) and **Python 3.11+**.
 ```bash
 cd database
 cp .env.example .env                  # Windows: copy .env.example .env
-docker compose up -d                  # PostgreSQL 16 + PostGIS
+docker compose up -d --build          # PostgreSQL 16 + PostGIS + pgvector (./Dockerfile)
 pip install -e ".[postgres,dev]"
 
 export DATABASE_URL=postgresql+psycopg://pgs:pgs@localhost:5432/pgs
@@ -187,12 +246,12 @@ export DATABASE_URL=postgresql+psycopg://pgs:pgs@localhost:5432/pgs
 
 python -m alembic upgrade head        # create all tables
 python scripts/seed_geography.py      # 7 provinces, 77 districts, 753 local bodies
-python -m pytest                      # 13 tests should pass
+python -m pytest                      # 184 tests should pass
 ```
 
 The tests need a live database: they read `DATABASE_URL` and each test runs in a transaction that
 is rolled back. Without `DATABASE_URL` set, the suite skips rather than fails, so check that
-tests actually ran (`13 passed`), not just that the command exited green.
+tests actually ran (`184 passed`), not just that the command exited green.
 
 Look inside the database:
 
@@ -207,6 +266,13 @@ docker exec -it pgs-postgres psql -U pgs -d pgs -c "SELECT * FROM provinces;"
 - **`password authentication failed for user "pgs"`:** another PostgreSQL on your PC is using
   port 5432. Add `POSTGRES_PORT=5433` to `.env`, run `docker compose down` then
   `docker compose up -d`, and use port `5433` in `DATABASE_URL`.
+- **`column ... does not exist` (e.g. `pages.canonical_url`) although `alembic current` says
+  head:** your database was created from an earlier draft of a migration that was later edited
+  in place, so Alembic sees nothing to apply. Recreate it (this deletes its data):
+  `docker exec pgs-postgres psql -U pgs -d postgres -c "DROP DATABASE pgs WITH (FORCE)" -c "CREATE DATABASE pgs"`,
+  then `python -m alembic upgrade head` and `python scripts/seed_geography.py`.
+- **`extension "vector" is not available`** during `alembic upgrade head`: the container
+  is still on the old PostGIS-only image. Run `docker compose up -d --build`.
 - **`connection refused`:** the container is still starting or stopped. Run `docker compose up -d`
   and wait a few seconds.
 

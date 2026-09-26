@@ -612,7 +612,7 @@ class TestGeographyAndValidation:
         with pytest.raises(IntegrityError):
             silver.session.flush()
 
-    @pytest.mark.parametrize("field", ["source_url", "searchable_text", "content_hash"])
+    @pytest.mark.parametrize("field", ["searchable_text", "content_hash"])
     def test_missing_required_field_is_rejected_before_sql(
         self, silver: SilverRepository, bronze_document: int, field: str
     ) -> None:
@@ -620,6 +620,40 @@ class TestGeographyAndValidation:
         del payload[field]
         with pytest.raises(ValueError, match=field):
             silver.save_page(payload, crawled_document_id=bronze_document)
+
+    def test_missing_source_url_falls_back_to_bronze_normalized_url(
+        self, silver: SilverRepository, bronze: BronzeRepository
+    ) -> None:
+        """The ETL need not send the URL: Bronze already holds the page's identity."""
+        doc_id = bronze.save_document(
+            bronze_doc(url=f"{SOURCE_URL}/amp", normalized_url=f"{SOURCE_URL}/canonical"),
+            register_unknown_domains=True,
+        ).id
+        payload = etl_payload()
+        del payload["source_url"]
+        result = silver.save_page(payload, crawled_document_id=doc_id)
+        page = silver.session.get(Page, result.id)
+        assert page is not None
+        assert page.canonical_url == f"{SOURCE_URL}/canonical"
+
+    def test_payload_source_url_wins_over_bronze(
+        self, silver: SilverRepository, bronze_document: int
+    ) -> None:
+        other = f"https://{HOST}/notice/detail/999"
+        result = silver.save_page(
+            etl_payload(source_url=other), crawled_document_id=bronze_document
+        )
+        page = silver.session.get(Page, result.id)
+        assert page is not None
+        assert page.canonical_url == other
+
+    def test_missing_source_url_and_bronze_row_is_rejected(
+        self, silver: SilverRepository
+    ) -> None:
+        payload = etl_payload()
+        del payload["source_url"]
+        with pytest.raises(ValueError, match="source_url"):
+            silver.save_page(payload, crawled_document_id=9_999_999)
 
 
 class TestForeignKeys:

@@ -144,5 +144,6 @@ class StoredFile(IdMixin, TimestampMixin, Base):
         default=ProcessingStatus.UNPROCESSED,
         server_default=ProcessingStatus.UNPROCESSED.value,
     )
+    processing_error: Mapped[str | None] = mapped_column(Text)
 
     crawled_document: Mapped[CrawledDocument | None] = relationship(back_populates="stored_files")

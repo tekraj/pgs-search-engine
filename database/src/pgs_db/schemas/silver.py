@@ -1,6 +1,6 @@
 """Pydantic schemas for the Silver tables.
 
-Phase 2 scope. Field constraints mirror the column definitions in
+Field constraints mirror the column definitions in
 `pgs_db.models.silver`, which in turn trace to `ETL/spark/README.md` §5.2 and the
 search team's `SearchDocument` / `GeoLocation`.
 
@@ -13,7 +13,16 @@ from datetime import datetime
 
 from pydantic import Field, model_validator
 
-from ..enums import ContactType, GeoTagMethod, Language, LocalBodyType, ProcessingStatus
+from ..enums import (
+    ContactType,
+    EntityType,
+    GeoTagMethod,
+    Language,
+    LocalBodyType,
+    MediaType,
+    ProcessingStatus,
+)
+from ..models.silver import EMBEDDING_DIM
 from .base import ReadSchema, SchemaBase
 from .bronze import SHA256_PATTERN
 
@@ -128,7 +137,9 @@ class PageBase(SchemaBase):
     canonical_url: str = Field(min_length=1, description="The page's identity")
     content_hash: str = Field(pattern=SHA256_PATTERN)
 
-    crawled_document_id: int
+    # Exactly one source: a crawled page or a stored file (PDF, image, ...).
+    crawled_document_id: int | None = None
+    stored_file_id: int | None = None
     domain_id: int | None = None
 
     title: str | None = None
@@ -137,11 +148,21 @@ class PageBase(SchemaBase):
     word_count: int = Field(ge=0)
     keywords: list[str] | None = None
     language: Language
+    language_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     content_type: str = Field(default="web_page", max_length=32)
+    category: str | None = Field(default=None, max_length=64)
+    author: str | None = Field(default=None, max_length=255)
     published_at: datetime | None = None
+    quality_flags: list[str] | None = None
 
     sim_hash: int | None = None
     duplicate_of_id: int | None = None
+
+    @model_validator(mode="after")
+    def _one_source(self) -> "PageBase":
+        if (self.crawled_document_id is None) == (self.stored_file_id is None):
+            raise ValueError("a page needs exactly one of crawled_document_id, stored_file_id")
+        return self
 
 
 class PageCreate(PageBase):
@@ -153,10 +174,115 @@ class PageRead(PageBase, ReadSchema):
 
     processing_status: ProcessingStatus = ProcessingStatus.UNPROCESSED
     processing_error: str | None = None
+    first_seen_at: datetime
+    last_seen_at: datetime
+    version: int = Field(ge=1)
+
+
+# ------------------------------------------------------------------ page sources
+
+
+class PageSourceRead(ReadSchema):
+    """One Bronze row that fed a page (fetch history). Written only by save_page."""
+
+    page_id: int
+    crawled_document_id: int | None = None
+    stored_file_id: int | None = None
+    fetched_at: datetime
+    content_changed: bool
+
+
+# --------------------------------------------------------------------- page media
+
+
+class PageMediaBase(SchemaBase):
+    """An image, video or linked document on a page."""
+
+    url: str = Field(min_length=1)
+    media_type: MediaType
+    alt_text: str | None = None
+    extracted_text: str | None = Field(default=None, description="OCR or parsed text")
+    stored_file_id: int | None = None
+
+
+class PageMediaCreate(PageMediaBase):
+    """Data required to attach media to a page."""
+
+
+class PageMediaRead(PageMediaBase, ReadSchema):
+    """Media data returned by the application."""
+
+    page_id: int
+
+
+# ----------------------------------------------------------------------- entities
+
+
+class EntityBase(SchemaBase):
+    """A person, organization or event, shared by every page that names it."""
+
+    normalized_key: str = Field(min_length=1, max_length=255)
+    type: EntityType
+    name_en: str | None = Field(default=None, max_length=255)
+    name_ne: str | None = Field(default=None, max_length=255)
+
+
+class EntityCreate(EntityBase):
+    """Data required to record an entity."""
+
+
+class EntityRead(EntityBase, ReadSchema):
+    """Entity data returned by the application."""
+
+
+class PageEntityBase(SchemaBase):
+    """How strongly one page mentions one entity."""
+
+    entity_id: int
+    mention_count: int = Field(default=1, ge=1)
+    salience: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class PageEntityCreate(PageEntityBase):
+    """Data required to link an entity to a page."""
+
+
+class PageEntityRead(PageEntityBase, ReadSchema):
+    """Page-entity link returned by the application."""
+
+    page_id: int
+
+
+# --------------------------------------------------------------------- embeddings
+
+
+class PageEmbeddingBase(SchemaBase):
+    """One embedded chunk of a page."""
+
+    model_name: str = Field(min_length=1, max_length=128)
+    model_version: str | None = Field(default=None, max_length=64)
+    chunk_index: int = Field(ge=0)
+    chunk_text: str = Field(min_length=1)
+    embedding: list[float] = Field(min_length=EMBEDDING_DIM, max_length=EMBEDDING_DIM)
+
+
+class PageEmbeddingCreate(PageEmbeddingBase):
+    """Data required to store one embedded chunk."""
+
+
+class PageEmbeddingRead(PageEmbeddingBase, ReadSchema):
+    """Embedded chunk returned by the application."""
+
+    page_id: int
+    content_hash: str = Field(pattern=SHA256_PATTERN)
+    embedded_at: datetime
 
 
 class PageWithRelations(PageRead):
-    """A page together with its geo tags and contacts."""
+    """A page together with everything hanging off it except its embeddings."""
 
     geo_tags: list[PageGeoTagRead] = Field(default_factory=list)
     contacts: list[PageContactRead] = Field(default_factory=list)
+    media: list[PageMediaRead] = Field(default_factory=list)
+    entities: list[PageEntityRead] = Field(default_factory=list)
+    sources: list[PageSourceRead] = Field(default_factory=list)

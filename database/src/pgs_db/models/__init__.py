@@ -3,7 +3,17 @@
 from .crawl import CrawledDocument, CrawlRun, StoredFile
 from .domain import Domain
 from .geography import District, LocalBody, Province
-from .silver import Page, PageContact, PageGeoTag
+from .silver import (
+    EMBEDDING_DIM,
+    Entity,
+    Page,
+    PageContact,
+    PageEmbedding,
+    PageEntity,
+    PageGeoTag,
+    PageMedia,
+    PageSource,
+)
 
 __all__ = [
     # bronze
@@ -19,4 +29,10 @@ __all__ = [
     "Page",
     "PageGeoTag",
     "PageContact",
+    "PageSource",
+    "PageMedia",
+    "Entity",
+    "PageEntity",
+    "PageEmbedding",
+    "EMBEDDING_DIM",
 ]

@@ -76,3 +76,20 @@ class GeoTagMethod(enum.StrEnum):
     NER = "NER"  # named-entity recognition
     DOMAIN = "DOMAIN"  # the site itself belongs to a local body
     GEO_META = "GEO_META"  # geo.* meta tags / structured data
+
+
+class MediaType(enum.StrEnum):
+    """What a `page_media` row points at."""
+
+    IMAGE = "IMAGE"
+    VIDEO = "VIDEO"
+    DOCUMENT = "DOCUMENT"  # a linked PDF / DOCX / ...
+
+
+class EntityType(enum.StrEnum):
+    """Named-entity class for `entities` (places are geo tags, not entities)."""
+
+    PERSON = "PERSON"
+    ORGANIZATION = "ORGANIZATION"
+    EVENT = "EVENT"
+    OTHER = "OTHER"

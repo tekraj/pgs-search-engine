@@ -18,11 +18,14 @@ derivable by joining `page_geo_tags` to the seeded gazetteer, and duplicating
 
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     Float,
+    func,
     ForeignKey,
     Index,
     Integer,
@@ -34,13 +37,24 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..base import Base, IdMixin, TimestampMixin
-from ..enums import ContactType, GeoTagMethod, Language, ProcessingStatus
+from ..enums import (
+    ContactType,
+    EntityType,
+    GeoTagMethod,
+    Language,
+    MediaType,
+    ProcessingStatus,
+)
 from ._types import str_enum
-from .crawl import CrawledDocument
+from .crawl import CrawledDocument, StoredFile
 from .domain import Domain
 from .geography import District, LocalBody, Province
 
 TextArray = ARRAY(Text)
+
+# Fixed by the search team's query model (`all-MiniLM-L6-v2`, pgs_search.query.
+# embeddings). Changing models to another size needs a migration.
+EMBEDDING_DIM = 384
 
 
 class Page(IdMixin, TimestampMixin, Base):
@@ -48,17 +62,31 @@ class Page(IdMixin, TimestampMixin, Base):
 
     __tablename__ = "pages"
     __table_args__ = (
+        # A page comes from exactly one source: a crawled page or a stored file.
+        CheckConstraint(
+            "num_nonnulls(crawled_document_id, stored_file_id) = 1", name="one_source"
+        ),
+        CheckConstraint(
+            "language_confidence IS NULL OR (language_confidence >= 0 AND language_confidence <= 1)",
+            name="language_confidence_range",
+        ),
+        CheckConstraint("version >= 1", name="version_positive"),
         Index("ix_pages_processing_status", "processing_status"),
+        Index("ix_pages_category", "category"),
         Index("ix_pages_content_hash", "content_hash"),
         Index("ix_pages_published_at", "published_at"),
     )
 
     # --- Bronze linkage -----------------------------------------------------
-    # The latest Bronze row this page was built from. Not unique: it moves
-    # forward on every recrawl. RESTRICT so Bronze retention can't silently
-    # delete a live page -- repoint or delete the page first.
-    crawled_document_id: Mapped[int] = mapped_column(
+    # The latest Bronze row this page was built from: a crawled page, or a file
+    # (PDF, image, ...) the scraper stored in MinIO. Exactly one is set. Not
+    # unique: it moves forward on every recrawl. RESTRICT so Bronze retention
+    # can't silently delete a live page -- repoint or delete the page first.
+    crawled_document_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("crawled_documents.id", ondelete="RESTRICT"), index=True
+    )
+    stored_file_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("stored_files.id", ondelete="RESTRICT"), index=True
     )
     domain_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("domains.id"), index=True
@@ -76,8 +104,25 @@ class Page(IdMixin, TimestampMixin, Base):
     word_count: Mapped[int] = mapped_column(Integer)
     keywords: Mapped[list[str] | None] = mapped_column(TextArray)
     language: Mapped[Language] = mapped_column(str_enum(Language, "language"))
+    language_confidence: Mapped[float | None] = mapped_column(Float)  # 0..1, from the detector
     content_type: Mapped[str] = mapped_column(String(32), default="web_page")
+    # Content class the ETL assigns (notice, news, tender, ...); free text for now.
+    category: Mapped[str | None] = mapped_column(String(64))
+    author: Mapped[str | None] = mapped_column(String(255))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # ETL quality warnings, e.g. {"thin_content", "boilerplate", "ocr_low_confidence"}.
+    quality_flags: Mapped[list[str] | None] = mapped_column(TextArray)
+
+    # --- history ------------------------------------------------------------
+    # first_seen_at: when Silver first saved this URL. last_seen_at: the latest
+    # save. version: starts at 1, +1 each time the content_hash changes.
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
 
     # --- deduplication (ETL §3: SHA256 exact + SimHash fuzzy) ---------------
     content_hash: Mapped[str] = mapped_column(String(64))
@@ -97,13 +142,26 @@ class Page(IdMixin, TimestampMixin, Base):
     )
     processing_error: Mapped[str | None] = mapped_column(Text)
 
-    crawled_document: Mapped[CrawledDocument] = relationship()
+    crawled_document: Mapped[CrawledDocument | None] = relationship()
+    stored_file: Mapped[StoredFile | None] = relationship()
     domain: Mapped[Domain | None] = relationship()
     duplicate_of: Mapped["Page | None"] = relationship(remote_side="Page.id")
     geo_tags: Mapped[list["PageGeoTag"]] = relationship(
         back_populates="page", cascade="all, delete-orphan"
     )
     contacts: Mapped[list["PageContact"]] = relationship(
+        back_populates="page", cascade="all, delete-orphan"
+    )
+    sources: Mapped[list["PageSource"]] = relationship(
+        back_populates="page", cascade="all, delete-orphan"
+    )
+    media: Mapped[list["PageMedia"]] = relationship(
+        back_populates="page", cascade="all, delete-orphan"
+    )
+    entities: Mapped[list["PageEntity"]] = relationship(
+        back_populates="page", cascade="all, delete-orphan"
+    )
+    embeddings: Mapped[list["PageEmbedding"]] = relationship(
         back_populates="page", cascade="all, delete-orphan"
     )
 
@@ -192,3 +250,149 @@ class PageContact(IdMixin, TimestampMixin, Base):
     value: Mapped[str] = mapped_column(Text)
 
     page: Mapped[Page] = relationship(back_populates="contacts")
+
+
+class PageSource(IdMixin, TimestampMixin, Base):
+    """Every Bronze row that fed a page: its fetch history.
+
+    `pages.crawled_document_id` / `stored_file_id` only point at the newest source;
+    this keeps all of them, so "when did this notice change?" is answerable after
+    the page has been repointed. Written by `save_page`, one row per source row.
+    """
+
+    __tablename__ = "page_sources"
+    __table_args__ = (
+        CheckConstraint(
+            "num_nonnulls(crawled_document_id, stored_file_id) = 1", name="one_source"
+        ),
+        UniqueConstraint(
+            "page_id",
+            "crawled_document_id",
+            "stored_file_id",
+            name="uq_page_sources_page_source",
+            postgresql_nulls_not_distinct=True,
+        ),
+    )
+
+    page_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("pages.id", ondelete="CASCADE"), index=True
+    )
+    crawled_document_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("crawled_documents.id", ondelete="CASCADE"), index=True
+    )
+    stored_file_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("stored_files.id", ondelete="CASCADE"), index=True
+    )
+    # crawled_documents.fetched_at, or stored_files.stored_at.
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # True when this source's content differed from what the page held before it.
+    content_changed: Mapped[bool] = mapped_column(Boolean)
+
+    page: Mapped[Page] = relationship(back_populates="sources")
+
+
+class PageMedia(IdMixin, TimestampMixin, Base):
+    """An image, video or linked document on a page, with any text pulled out of it.
+
+    `extracted_text` holds OCR (images) or parsed text (PDFs), so a scanned notice
+    is searchable. `stored_file_id` links the MinIO copy when the scraper kept one.
+    """
+
+    __tablename__ = "page_media"
+    __table_args__ = (UniqueConstraint("page_id", "url", name="uq_page_media_page_url"),)
+
+    page_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("pages.id", ondelete="CASCADE"), index=True
+    )
+    stored_file_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("stored_files.id", ondelete="SET NULL"), index=True
+    )
+    url: Mapped[str] = mapped_column(Text)
+    media_type: Mapped[MediaType] = mapped_column(str_enum(MediaType, "media_type"))
+    alt_text: Mapped[str | None] = mapped_column(Text)
+    extracted_text: Mapped[str | None] = mapped_column(Text)
+
+    page: Mapped[Page] = relationship(back_populates="media")
+    stored_file: Mapped[StoredFile | None] = relationship()
+
+
+class Entity(IdMixin, TimestampMixin, Base):
+    """A person, organization or event named across pages (NER output).
+
+    One row per real-world entity, shared by every page that mentions it.
+    `normalized_key` is the dedup key (`TYPE:casefolded name` unless the ETL
+    supplies its own), so "Mayor Dhanraj Acharya" found on 40 pages is one row.
+    Places are not entities here: they are `page_geo_tags` against the gazetteer.
+    """
+
+    __tablename__ = "entities"
+
+    normalized_key: Mapped[str] = mapped_column(String(255), unique=True)
+    type: Mapped[EntityType] = mapped_column(str_enum(EntityType, "entity_type"))
+    name_en: Mapped[str | None] = mapped_column(String(255))
+    name_ne: Mapped[str | None] = mapped_column(String(255))
+
+
+class PageEntity(IdMixin, TimestampMixin, Base):
+    """How strongly one page mentions one entity."""
+
+    __tablename__ = "page_entities"
+    __table_args__ = (
+        UniqueConstraint("page_id", "entity_id", name="uq_page_entities_page_entity"),
+        CheckConstraint("mention_count >= 1", name="mention_count_positive"),
+        CheckConstraint(
+            "salience IS NULL OR (salience >= 0 AND salience <= 1)", name="salience_range"
+        ),
+    )
+
+    page_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("pages.id", ondelete="CASCADE"), index=True
+    )
+    entity_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("entities.id", ondelete="CASCADE"), index=True
+    )
+    mention_count: Mapped[int] = mapped_column(Integer, default=1)
+    salience: Mapped[float | None] = mapped_column(Float)
+
+    page: Mapped[Page] = relationship(back_populates="entities")
+    entity: Mapped[Entity] = relationship()
+
+
+class PageEmbedding(IdMixin, TimestampMixin, Base):
+    """One embedded chunk of a page's text, for vector (semantic) search.
+
+    A page is split into chunks; each chunk has one vector per model. The vector
+    size is fixed at EMBEDDING_DIM. `content_hash` records which version of the
+    page was embedded, so a page whose text changed shows up in
+    `SilverRepository.pages_missing_embeddings` until it is re-embedded.
+    """
+
+    __tablename__ = "page_embeddings"
+    __table_args__ = (
+        UniqueConstraint(
+            "page_id", "model_name", "chunk_index", name="uq_page_embeddings_page_model_chunk"
+        ),
+        CheckConstraint("chunk_index >= 0", name="chunk_index_non_negative"),
+        # Approximate nearest-neighbour search by cosine distance (`<=>`).
+        Index(
+            "ix_page_embeddings_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
+
+    page_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("pages.id", ondelete="CASCADE"), index=True
+    )
+    model_name: Mapped[str] = mapped_column(String(128))
+    model_version: Mapped[str | None] = mapped_column(String(64))
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    chunk_text: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    embedded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    page: Mapped[Page] = relationship(back_populates="embeddings")

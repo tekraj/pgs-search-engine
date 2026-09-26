@@ -1,7 +1,6 @@
 """Pydantic request/response schemas.
 
-Phase 1 covers the Bronze tables plus the province reference schemas; Phase 2 adds
-the Silver tables. District, local-body and Gold schemas are still to come.
+Bronze, reference (provinces, districts, local bodies) and Silver. Gold is still to come.
 """
 
 from .base import ReadSchema, SchemaBase
@@ -22,8 +21,34 @@ from .bronze import (
     StoredFileCreate,
     StoredFileRead,
 )
-from .geography import ProvinceBase, ProvinceCreate, ProvinceRead, ProvinceUpdate
+from .geography import (
+    DistrictBase,
+    DistrictCreate,
+    DistrictRead,
+    DistrictUpdate,
+    LocalBodyBase,
+    LocalBodyCreate,
+    LocalBodyRead,
+    LocalBodyUpdate,
+    ProvinceBase,
+    ProvinceCreate,
+    ProvinceRead,
+    ProvinceUpdate,
+)
 from .silver import (
+    EntityBase,
+    EntityCreate,
+    EntityRead,
+    PageEmbeddingBase,
+    PageEmbeddingCreate,
+    PageEmbeddingRead,
+    PageEntityBase,
+    PageEntityCreate,
+    PageEntityRead,
+    PageMediaBase,
+    PageMediaCreate,
+    PageMediaRead,
+    PageSourceRead,
     GeoLocationOut,
     PageBase,
     PageContactBase,
@@ -71,9 +96,30 @@ __all__ = [
     "PageContactCreate",
     "PageContactRead",
     "GeoLocationOut",
+    "EntityBase",
+    "EntityCreate",
+    "EntityRead",
+    "PageEmbeddingBase",
+    "PageEmbeddingCreate",
+    "PageEmbeddingRead",
+    "PageEntityBase",
+    "PageEntityCreate",
+    "PageEntityRead",
+    "PageMediaBase",
+    "PageMediaCreate",
+    "PageMediaRead",
+    "PageSourceRead",
     # geography
     "ProvinceBase",
     "ProvinceCreate",
     "ProvinceRead",
     "ProvinceUpdate",
+    "DistrictBase",
+    "DistrictCreate",
+    "DistrictRead",
+    "DistrictUpdate",
+    "LocalBodyBase",
+    "LocalBodyCreate",
+    "LocalBodyRead",
+    "LocalBodyUpdate",
 ]

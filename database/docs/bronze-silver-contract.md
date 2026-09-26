@@ -1,22 +1,30 @@
 # Bronze → Silver contract (for the Spark ETL)
 
 How the Spark ETL reads Bronze and writes Silver. The Python reference implementation
-is `pgs_db.repositories.SilverRepository`; `tests/test_silver.py` proves every rule
-below against a real PostgreSQL, using payloads in the `ETL/spark/README.md` §5.2 shape.
+is `pgs_db.repositories.SilverRepository`; `tests/test_silver.py` and
+`tests/test_etl_support.py` and `tests/test_silver_complete.py` prove every rule below against a real PostgreSQL, using
+payloads in the `ETL/spark/README.md` §5.2 shape.
 
-Schema version: Alembic revision `e529ca38e6ae`.
+Schema version: Alembic revision `ac08008a1fbf`.
 
 ```text
-crawled_documents  (Bronze, one row per fetched version of a URL)
-        │  N:1 -- every version of a URL lands on one page;
-        │         pages.crawled_document_id points at the newest
-        ▼
+crawled_documents          stored_files
+(a fetched page)           (a PDF / image / doc in MinIO)
+        │                        │
+        │  N:1 -- every version of a URL lands on one page; exactly one of
+        │         pages.crawled_document_id / pages.stored_file_id points at
+        │         the newest source
+        ▼                        ▼
       pages        (Silver, one row per canonical_url)
         │
- ┌──────┴────────┐
- ▼               ▼
-page_geo_tags   page_contacts
+ ├──────────────┬───────────────┬──────────────┬──────────────┬───────────────┐
+ ▼              ▼               ▼              ▼              ▼               ▼
+page_geo_tags  page_contacts  page_sources   page_media    page_entities   page_embeddings
+                              (history)      (OCR text)    → entities      (pgvector 384)
 ```
+
+**Fastest route for the ETL:** `pgs_db.etl.process_bronze_batch(Session, transform)`
+runs the whole loop below; you write only `transform(row) -> payload`. See §4.
 
 ---
 
@@ -57,7 +65,7 @@ Keyword arguments win over the payload for `content_hash` and `sim_hash`.
 
 | Payload field (§5.2) | Column | Type | Rule |
 |---|---|---|---|
-| `source_url` (or `canonical_url`) | `canonical_url` | `TEXT` **UNIQUE** | required; the page's identity |
+| `source_url` (or `canonical_url`) | `canonical_url` | `TEXT` **UNIQUE** | optional; the page's identity. Omitted → the Bronze row's `normalized_url` |
 | `searchable_text` (or `body_text`) | `body_text` | `TEXT` | required, non-blank |
 | `word_count` | `word_count` | `INTEGER` | optional; else whitespace token count of `body_text` |
 | `language_detected` (or `language`) | `language` | `Language` | `ne`→`NE`, `en`→`EN`, `mixed`→`MIXED`, anything else or absent→`OTHER`. Region subtags are ignored (`en-US`→`EN`). |
@@ -108,9 +116,121 @@ seeded gazetteer has Kaski at **`D38`** (`D39` is Lamjung).
 
 Unique on `(page_id, type, value)`; a value repeated on one page is stored once.
 
+### Optional page fields
+
+| Payload field | Column | Rule |
+|---|---|---|
+| `language_confidence` | `language_confidence` | 0–1, from the language detector |
+| `category` | `category` | free text, e.g. `notice`, `news`, `tender` (max 64) |
+| `author` (or `extracted_metadata.author`) | `author` | max 255 |
+| `quality_flags` | `quality_flags` | list of strings, e.g. `["thin_content"]` |
+
+Set by the database, never sent: `first_seen_at` (first save), `last_seen_at` (latest
+save), `version` (1, then +1 each time `content_hash` changes).
+
+### `page_sources` — written automatically
+
+Every `save_page` call records its source row (`crawled_document_id` or
+`stored_file_id`) with its `fetched_at` / `stored_at` and whether the content changed.
+An older row that leaves the page untouched is still recorded. `page_history(page_id)`
+reads it back, oldest first.
+
+### `page_media` — from `media` (optional)
+
+```json
+"media": [
+  {"url": "https://pokharamun.gov.np/images/budget.png", "media_type": "image",
+   "alt_text": "Budget table", "extracted_text": "बजेट २०८०/८१ ..."}
+]
+```
+
+`media_type` is `image`, `video` or `document` (any case). `extracted_text` is OCR or
+parsed text, so a scanned notice is searchable. `stored_file_id` is optional: without
+it, the newest stored file whose `document_url` equals `url` is linked. Unique on
+`(page_id, url)`; a URL listed twice keeps its last entry.
+
+### `entities` / `page_entities` — from `entities` (optional)
+
+```json
+"entities": [
+  {"type": "person", "name_en": "Dhanraj Acharya", "name_ne": "धनराज आचार्य",
+   "mention_count": 3, "salience": 0.8}
+]
+```
+
+`type` is `person`, `organization`, `event` or `other` (places are geo tags, not
+entities). One `entities` row per real-world entity, shared across pages, keyed by
+`key` if sent, else `TYPE:casefolded name` (`PERSON:dhanraj acharya`). A known entity
+keeps its names; a missing `name_en` / `name_ne` is filled in. The same entity twice
+in one payload is merged (mention counts added, highest salience kept).
+
+### `page_embeddings` — from `embeddings` (optional), or `replace_embeddings`
+
+```json
+"embeddings": {
+  "model_name": "all-MiniLM-L6-v2", "model_version": "2",
+  "chunks": [{"text": "first chunk ...", "vector": [0.013, -0.07, ...]}]
+}
+```
+
+- **384 numbers per vector** (`EMBEDDING_DIM`), matching the search team's query model
+  `all-MiniLM-L6-v2`. Another size needs a migration.
+- One row per chunk; `chunk_index` defaults to the chunk's position.
+- Writing one model's chunks replaces only that model's rows for the page.
+- Each row records the page's `content_hash`. `pages_missing_embeddings(model)` lists
+  pages with no vectors for their **current** text, so a separate embedding job can
+  run instead of embedding inside the transform:
+
+```python
+for page in repo.pages_missing_embeddings("all-MiniLM-L6-v2", limit=500):
+    chunks = [{"text": c, "vector": model.encode(c).tolist()} for c in split(page.body_text)]
+    repo.replace_embeddings(page.id, "all-MiniLM-L6-v2", chunks)
+```
+
+- `nearest_chunks(vector, model_name, limit)` searches by cosine distance with the
+  HNSW index, canonical pages only.
+
+### When optional blocks are replaced
+
+`geo_location` and contacts are re-derived on **every** save (absent = none).
+`media`, `entities` and `embeddings` are replaced **only when their key is in the
+payload**, so an OCR, NER or embedding job that writes separately is not undone by a
+payload that never mentioned them. All blocks are validated before anything is written.
+
 ---
 
 ## 4. The claim → save → mark loop
+
+### Ready-made: `pgs_db.etl`
+
+```python
+from pgs_db import make_session_factory
+from pgs_db.etl import process_bronze_batch, process_stored_file_batch
+
+Session = make_session_factory()
+
+def transform_page(doc):            # doc: a claimed crawled_documents row
+    return {"searchable_text": clean(doc.text), "language_detected": detect(doc.text), ...}
+
+while (result := process_bronze_batch(Session, transform_page, limit=200)).claimed:
+    log(result)                     # BatchResult(claimed, saved, duplicates, failed, errors)
+process_stored_file_batch(Session, transform_pdf)   # stored_files: PDFs, images
+```
+
+For each claimed row it runs `transform` then `save_page` then marks the row PROCESSED,
+all in one transaction. A transform or save that raises marks only that row
+FAILED with `"ExceptionType: message"`. It also applies two ETL rules:
+
+- **Stage 4 domain rule** (`domain_geo=True`): a payload with no `geo_location`, on a
+  local body's own site, is tagged with that local body (`method: DOMAIN`).
+- **Stage 3 dedup** (`dedup=True`): the page is folded into an **older** page with the
+  same `content_hash`, or within 3 SimHash bits; a page whose content no longer
+  matches is unfolded.
+
+`content_hash` / `sim_hash` default to the Bronze row's (a stored file's `sha256`) unless
+the payload sets them. The hand-written loop below is what it does.
+
+### By hand
 
 Bronze's `crawled_documents.processing_status` is the ETL's work queue:
 
@@ -177,6 +297,37 @@ def reap() -> None:
   is older than the window to `UNPROCESSED`. A too-short window double-processes live
   rows — harmless, since `save_page` is idempotent, but wasted work.
 
+### Stored files (PDFs, images, docs)
+
+Files the scraper saved to MinIO (`stored_files`) have their own queue with the same
+shape, so a PDF becomes a searchable page the same way a crawled page does:
+
+```python
+with Session() as s, s.begin():
+    files = SilverRepository(s).claim_stored_files(limit)   # oldest stored_at first
+
+for f in files:
+    try:
+        with Session() as s, s.begin():
+            repo = SilverRepository(s)
+            text = extract_text(f.storage_path)              # Spark: read from MinIO
+            repo.save_page(
+                {"searchable_text": text, "content_hash": sha256(text), ...},
+                stored_file_id=f.id,
+            )
+            repo.mark_stored_files_processed([f.id])
+    except Exception as exc:
+        with Session() as s, s.begin():
+            SilverRepository(s).mark_stored_file_failed(f.id, str(exc))
+```
+
+- The page's URL falls back to `stored_files.document_url` when the payload has none.
+- `pages.stored_file_id` is set and `crawled_document_id` is NULL. The database
+  enforces exactly one of the two (`ck_pages_one_source`).
+- `mark_stored_file_failed` records the reason in `stored_files.processing_error`
+  (e.g. an encrypted or image-only PDF).
+- `release_stale` recovers stale claims on **both** queues.
+
 Non-Python writers: the claim is one statement —
 
 ```sql
@@ -197,16 +348,18 @@ RETURNING *;
 |---|---|---|
 | Bronze | `(normalized_url, content_hash)` | one fetched version of a URL |
 | Silver | `canonical_url` **UNIQUE** | one page per URL — the upsert key |
-| Silver | `crawled_document_id` | the newest Bronze version the page reflects (not unique) |
+| Silver | `crawled_document_id` / `stored_file_id` | the newest Bronze source the page reflects (exactly one set; not unique) |
 | Silver | `duplicate_of_id` | mirrored content folded into a canonical page |
 
 - **Recrawl with changed content** → Bronze inserts a new row (new `content_hash`) →
   `save_page` for the same `canonical_url` updates the existing page and repoints
   `crawled_document_id` at the new row.
-- **"Newest" is the highest `crawled_documents.id`.** If an older Bronze row is
-  processed after a newer one (retry, backfill), `save_page` leaves the page, its tags
-  and its contacts untouched and returns `SaveResult(inserted=False)` for the existing
-  page. Mark the old Bronze row processed as usual.
+- **"Newest" is the highest id in the same source table.** If an older Bronze row
+  (or stored file) is processed after a newer one (retry, backfill), `save_page`
+  leaves the page, its tags and its contacts untouched and returns
+  `SaveResult(inserted=False)` for the existing page. Mark the old row processed as
+  usual. When one URL was both crawled as a page and stored as a file, whichever is
+  processed last wins, and the other link is cleared.
 - **Running the ETL N times over the same row** yields one page, one set of tags, one
   set of contacts. `SaveResult.inserted` / `.duplicate` says which happened
   (`RETURNING id, (xmax = 0)`).
@@ -218,24 +371,45 @@ RETURNING *;
   retention must repoint or delete the page first.
 
 Exact (SHA256) and fuzzy (SimHash) dedup across *different* URLs is the ETL's
-decision: Spark picks the canonical page and calls
-`mark_duplicate_of(page_id, canonical_page_id)`. The database stores `content_hash`
-and `sim_hash` so the decision can be made and audited, and rejects a page that
-claims to be a duplicate of itself.
+decision (stage 3). The database provides the lookups and records the outcome:
+
+```python
+repo = SilverRepository(s)
+saved = repo.save_page(payload, crawled_document_id=doc.id, ...)
+original = repo.find_exact_duplicate(content_hash, exclude_page_id=saved.id)
+if original is None and sim_hash is not None:
+    near = repo.find_near_duplicates(sim_hash, exclude_page_id=saved.id)  # [(page, bits)]
+    original = near[0][0] if near else None
+if original is not None:
+    repo.mark_duplicate_of(saved.id, original.id)
+```
+
+- **`find_exact_duplicate(content_hash)`** returns the oldest page with that hash
+  that is not itself folded into another.
+- **`find_near_duplicates(sim_hash, max_distance=3)`** returns canonical pages within
+  3 differing SimHash bits (3/64 ≈ the ETL spec's ">95% similar"), closest first.
+  Pass the signed int64 as stored. It scans every page with a `sim_hash`, which is
+  fine at thousands of pages; at millions it needs band indexing first.
+- **`mark_duplicate_of(page_id, canonical_page_id)`** folds the page and rejects a
+  page that claims to be a duplicate of itself.
 
 ## 6. Errors and transactions
 
 | Situation | Behaviour |
 |---|---|
-| Missing `source_url`, `searchable_text` or `content_hash` | `ValueError` before any SQL |
+| Missing `searchable_text` or `content_hash` | `ValueError` before any write |
+| Missing `source_url` and no Bronze row for `crawled_document_id` | `ValueError` before any write |
 | Geo tag with a level but no `method` / `confidence` | `ValueError` before any SQL; no page is written |
 | Unknown `method`, or `confidence` outside 0–1 | `ValueError` before any SQL (and a CHECK behind it) |
 | Unrecognised `language_detected` | stored as `OTHER`, not an error |
 | A stored `language` / `method` outside the enum (raw SQL) | CHECK violation (`ck_pages_language`, `ck_page_geo_tags_geo_tag_method`) |
 | Unknown `province_code` / `district_code` / `municipality_id` | FK violation, raised — the ETL should `mark_bronze_failed` |
 | Geo block with nothing resolved | skipped, not an error |
-| Unknown `crawled_document_id` | FK violation, raised |
-| Page deleted | tags and contacts cascade |
+| Unknown `crawled_document_id` / `stored_file_id` | FK violation, raised |
+| Both or neither of `crawled_document_id` / `stored_file_id` | `ValueError` before any SQL (and `ck_pages_one_source` behind it) |
+| Missing `source_url` and no stored file for `stored_file_id` | `ValueError` before any write |
+| Invalid `media`, `entities` or `embeddings` block (bad type, wrong vector size, NaN, ...) | `ValueError` before any write |
+| Page deleted | tags, contacts, sources, media, entity links and embeddings cascade (entities themselves stay) |
 
 Nothing in `SilverRepository` commits. The caller owns the transaction, so one page
 plus its tags, contacts and Bronze status land as a single unit of work or not at all —
@@ -261,7 +435,25 @@ and reports back with `mark_processed(page_id)` or `mark_processed(page_id, erro
 Key OpenSearch documents on `pages.id` (or `canonical_url`); the old `document_id` no
 longer exists.
 
-## 9. Open questions for the ETL/Spark team
+## 9. Geo-tagging helpers (stage 4)
+
+`pgs_db.ReferenceRepository` answers the two lookups stage 4 describes. Both return
+codes in the shape the `geo_location` block expects.
+
+- **Domain rules: `geo_for_domain(domain_id)`.** For a page on a local body's own site
+  (`pokharamun.gov.np`), returns
+  `{"province_code": "P4", "district_code": "D38", "municipality_id": "MUN414", "method": "DOMAIN", "confidence": 1.0}`,
+  ready to pass as `geo_location`. Returns None for other sites.
+- **`link_domains_to_local_bodies()`** fills `domains.local_body_id` by matching each
+  domain against the 753 `local_bodies.website` hosts (`www.` ignored). It only fills
+  unlinked rows, so manual links survive. Run it after new domains are registered;
+  until it has run, `geo_for_domain` finds nothing.
+- **Gazetteer matching: `gazetteer()`.** One flat list of all 837 places
+  (`level`, `code`, `name_en`, `name_ne`, and the codes of every level above), for
+  Spark to broadcast and match in text. Tags built from it use `method: "GAZETTEER"`
+  and a confidence the ETL chooses.
+
+## 10. Open questions for the ETL/Spark team
 
 1. **No Spark implementation exists to verify against.** Confirm this contract when the
    real transform lands.
@@ -273,7 +465,13 @@ longer exists.
    (as the loop above does), or add it to the payload.
 5. **`published_at` and `content_type` are in `SearchDocument` but not §5.2.** Both are
    optional here.
-6. **`D38` vs `D39` for Kaski** — §5.2's example disagrees with the seeded gazetteer. The
-   seeded values are authoritative.
+6. **`D38` vs `D39` for Kaski, `MUN414` vs `MUN75340` for Pokhara** — §5.2's example
+   disagrees with the seeded gazetteer. The seeded values are authoritative; take them
+   from `gazetteer()`.
 7. **The Kafka consumer writes SQLite** (`ETL/kafka/consumer.py`), not PostgreSQL, and its
    `documents` table duplicates Bronze. Nothing currently bridges it to this layer.
+8. **`page_embeddings` is built with the search team's choices:** pgvector in
+   Postgres, 384 dimensions (`all-MiniLM-L6-v2`), one row per chunk; either inside
+   the payload or by a separate job using `pages_missing_embeddings`. Note that
+   `all-MiniLM-L6-v2` is English-only: Nepali text will embed poorly. A multilingual
+   384-dimension model (`paraphrase-multilingual-MiniLM-L12-v2`) keeps the same column.

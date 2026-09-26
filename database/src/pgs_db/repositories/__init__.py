@@ -8,10 +8,12 @@ from ._mapping import (
     unsigned_simhash,
 )
 from .bronze import BronzeRepository, SaveResult
+from .reference import ReferenceRepository
 from .silver import SilverRepository
 
 __all__ = [
     "BronzeRepository",
+    "ReferenceRepository",
     "SaveResult",
     "SilverRepository",
     "crawl_stats_columns",
