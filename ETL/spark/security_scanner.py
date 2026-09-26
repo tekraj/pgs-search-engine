@@ -5,10 +5,15 @@ project demo. Real malware scanning (ClamAV) is separate, later work.
 """
 
 import hashlib
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict, cast
+
+try:
+    from pyspark.sql import DataFrame
+except ImportError:  # pragma: no cover - optional dependency for type checking/runtime
+    DataFrame = Any  # type: ignore[misc,assignment]
 
 if TYPE_CHECKING:
-    from pyspark.sql import DataFrame
+    from pyspark.sql import DataFrame as SparkDataFrame
 
 # Extensions we treat as risky to auto-run/auto-open.
 SUSPICIOUS_EXTENSIONS = {
@@ -55,8 +60,8 @@ class ScanResult(TypedDict):
 
 
 def scan_file(filename: str, content: bytes) -> ScanResult:
-    suspicious_reasons = []
-    unknown_reasons = []
+    suspicious_reasons: list[str] = []
+    unknown_reasons: list[str] = []
 
     ext = get_extension(filename)
     if ext in SUSPICIOUS_EXTENSIONS:
@@ -129,6 +134,7 @@ if __name__ == "__main__":
         "notice.pdf": b"%PDF-1.4 dummy pdf content for testing",
         "photo.jpg": b"dummy jpeg bytes for testing",
         "weird_report.xyz": b"harmless content with an unusual extension",
+        "a_very_long_filename_that_someone_might_accidentally_save_from_a_browser_download_dialog_without_editing_it.txt": b"short harmless content",
     }
 
     for filename, content in test_files.items():
