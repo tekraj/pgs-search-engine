@@ -20,7 +20,8 @@ select = [
 known-first-party = ["pgs_db"]
 
 [tool.pyright]
-include = ["api", "database/src"]
+include = [".", "api", "database/src", "search-engine"]
+extraPaths = [".", "search-engine"]
 venvPath = "."
 venv = ".venv"
 typeCheckingMode = "strict"
