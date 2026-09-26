@@ -14,7 +14,9 @@ PROCESSED or FAILED -- is done here, the same way every time:
     process_stored_file_batch(Session, transform_pdf)   # PDFs / images in MinIO
 
 A transform that raises marks just that row FAILED with the error; the batch
-carries on. Run `SilverRepository.release_stale` on a schedule to recover rows
+carries on. A transform whose virus scan flags the payload raises `Infected`
+instead, after moving the object to the quarantine bucket: the row is recorded in
+`quarantined_files` and parked as QUARANTINED, never FAILED. Run `SilverRepository.release_stale` on a schedule to recover rows
 from workers that died mid-batch.
 """
 
@@ -35,6 +37,26 @@ FileTransform = Callable[[StoredFile], Mapping[str, Any]]
 _MAX_ERROR_LENGTH = 2000
 
 
+class Infected(Exception):
+    """Raise from a transform when ClamAV flags the payload.
+
+    Move the object to the quarantine bucket first, then raise with where it went:
+
+        verdict = clamav.scan(data)
+        if verdict.infected:
+            path = move_to_quarantine(stored.storage_path)
+            raise Infected(verdict.signature, path, scanner_version=verdict.version)
+    """
+
+    def __init__(
+        self, threat_signature: str, quarantine_path: str, *, scanner_version: str | None = None
+    ) -> None:
+        super().__init__(f"{threat_signature} (isolated at {quarantine_path})")
+        self.threat_signature = threat_signature
+        self.quarantine_path = quarantine_path
+        self.scanner_version = scanner_version
+
+
 @dataclass
 class BatchResult:
     """What one batch did. `errors` maps a Bronze row id to why it failed."""
@@ -42,6 +64,7 @@ class BatchResult:
     claimed: int = 0
     saved: int = 0
     duplicates: int = 0
+    quarantined: int = 0
     failed: int = 0
     errors: dict[int, str] = field(default_factory=dict)
 
@@ -83,6 +106,12 @@ def process_bronze_batch(
             domain_id=doc.domain_id,
             build=lambda doc=doc: transform(doc),
             save=save,
+            quarantine=lambda repo, inf, doc=doc: repo.quarantine(
+                crawled_document_id=doc.id,
+                threat_signature=inf.threat_signature,
+                quarantine_path=inf.quarantine_path,
+                scanner_version=inf.scanner_version,
+            ),
             mark_failed=SilverRepository.mark_bronze_failed,
             dedup=dedup,
             domain_geo=domain_geo,
@@ -136,6 +165,12 @@ def process_stored_file_batch(
             domain_id=domain_id,
             build=lambda stored=stored: transform(stored),
             save=save,
+            quarantine=lambda repo, inf, stored=stored: repo.quarantine(
+                stored_file_id=stored.id,
+                threat_signature=inf.threat_signature,
+                quarantine_path=inf.quarantine_path,
+                scanner_version=inf.scanner_version,
+            ),
             mark_failed=SilverRepository.mark_stored_file_failed,
             dedup=dedup,
             domain_geo=domain_geo,
@@ -151,6 +186,7 @@ def _save_one(
     domain_id: int | None,
     build: Callable[[], Mapping[str, Any]],
     save: Callable[[SilverRepository, Mapping[str, Any]], int],
+    quarantine: Callable[[SilverRepository, Infected], object],
     mark_failed: Callable[[SilverRepository, int, str], None],
     dedup: bool,
     domain_geo: bool,
@@ -175,6 +211,10 @@ def _save_one(
             if dedup and _fold_duplicate(repo, page_id):
                 result.duplicates += 1
         result.saved += 1
+    except Infected as infected:
+        with session_factory() as s, s.begin():
+            quarantine(SilverRepository(s), infected)
+        result.quarantined += 1
     except Exception as exc:  # noqa: BLE001 -- any transform/save error parks the row
         message = f"{type(exc).__name__}: {exc}"[:_MAX_ERROR_LENGTH]
         with session_factory() as s, s.begin():

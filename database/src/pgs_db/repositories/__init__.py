@@ -8,11 +8,13 @@ from ._mapping import (
     unsigned_simhash,
 )
 from .bronze import BronzeRepository, SaveResult
+from .quarantine import QuarantineRepository
 from .reference import ReferenceRepository
 from .silver import SilverRepository
 
 __all__ = [
     "BronzeRepository",
+    "QuarantineRepository",
     "ReferenceRepository",
     "SaveResult",
     "SilverRepository",

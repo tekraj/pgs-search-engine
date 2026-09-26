@@ -21,6 +21,7 @@ from ..enums import (
     LocalBodyType,
     MediaType,
     ProcessingStatus,
+    QuarantineStatus,
 )
 from ..models.silver import EMBEDDING_DIM
 from .base import ReadSchema, SchemaBase
@@ -286,3 +287,38 @@ class PageWithRelations(PageRead):
     media: list[PageMediaRead] = Field(default_factory=list)
     entities: list[PageEntityRead] = Field(default_factory=list)
     sources: list[PageSourceRead] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------- quarantine
+
+
+class QuarantinedFileRead(ReadSchema):
+    """One file ClamAV flagged, as the admin security endpoint returns it."""
+
+    crawled_document_id: int | None = None
+    stored_file_id: int | None = None
+    domain_id: int | None = None
+    document_url: str
+    source_page_url: str | None = None
+    original_path: str | None = None
+    quarantine_path: str
+    sha256: str
+    size_bytes: int | None = None
+    content_type: str | None = None
+    threat_signature: str
+    scanner_engine: str
+    scanner_version: str | None = None
+    scanned_at: datetime
+    status: QuarantineStatus
+    deleted_at: datetime | None = None
+    deleted_by: str | None = None
+
+
+class QuarantineSummary(SchemaBase):
+    """The dashboard's `quarantine_store` block."""
+
+    count: int = Field(ge=0)
+    size_bytes: int = Field(ge=0)
+    size_mb: int = Field(ge=0)
+    latest_threat_detected: str | None = None
+    latest_scanned_at: datetime | None = None

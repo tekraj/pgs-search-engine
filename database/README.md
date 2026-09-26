@@ -43,8 +43,7 @@ We use three layers:
 | Layer | Meaning | Tables | Status |
 |---|---|---|---|
 | **Bronze** | Raw: a record of every crawl and every downloaded file, unchanged | `crawl_runs`, `crawled_documents`, `stored_files` | **Built** |
-| | | `quarantined_files` | Planned |
-| **Silver** | Clean: one record per page, duplicates removed, location tagged | `pages`, `page_geo_tags`, `page_contacts`, `page_sources`, `page_media`, `entities`, `page_entities`, `page_embeddings` | **Built** |
+| **Silver** | Clean: one record per page, duplicates removed, location tagged | `pages`, `page_geo_tags`, `page_contacts`, `page_sources`, `page_media`, `entities`, `page_entities`, `page_embeddings`, `quarantined_files` | **Built** |
 | **Gold** | Ready to use: summaries for the map and dashboard | `district_stats`, `domain_stats` | Planned |
 
 Plus **reference tables** that everything links to:
@@ -55,9 +54,10 @@ Plus **reference tables** that everything links to:
 
 ## 4. What is built
 
-Four migrations are in place: `95e7b8aa6ec5` (Bronze + reference), `e529ca38e6ae` (Silver),
+Five migrations are in place: `95e7b8aa6ec5` (Bronze + reference), `e529ca38e6ae` (Silver),
 `e6aa9e30d49a` (pages built from stored files, `stored_files.processing_error`) and
-`ac08008a1fbf` (the rest of Silver; enables pgvector).
+`ac08008a1fbf` (the rest of Silver; enables pgvector) and `8aa170eaaf03`
+(`quarantined_files`, and `QUARANTINED` as a processing status).
 
 | Table | Layer | Written by | Read by | Mirrors |
 |---|---|---|---|---|
@@ -94,7 +94,6 @@ works.
 | `provinces` | Reference | Built, seeded (7) |
 | `districts` | Reference | Built, seeded (77) |
 | `local_bodies` | Reference | Built, seeded (753) |
-| `quarantined_files` | Bronze | Not built — ClamAV quarantine log |
 | `pages` | Silver | Built — ETL output, from a crawled page or a stored file (PDF, image) |
 | `page_geo_tags` | Silver | Built — province/district/municipality/ward per page |
 | `page_contacts` | Silver | Built — emails, phones, socials per page |
@@ -102,6 +101,7 @@ works.
 | `page_media` | Silver | Built — images, videos, linked documents, with OCR/parsed text |
 | `entities` / `page_entities` | Silver | Built — people, organizations, events per page |
 | `page_embeddings` | Silver | Built — pgvector, 384 dimensions, HNSW cosine index |
+| `quarantined_files` | Silver | Built — files ClamAV flagged during ETL; the API's quarantine audit |
 | `district_stats` | Gold | Not built — page counts for the UI map |
 | `domain_stats` | Gold | Not built — pages scraped/failed per domain |
 | `error_logs` | Ops | Not built — all services write here |
@@ -156,6 +156,11 @@ but not loaded, since the table has no ward-count column.
   `schemas/bronze.py`). On his branch, `class LocalBodyBase` is indented inside
   `DistrictRead`, so `LocalBodyCreate` raises `NameError` on import. Its `crawl.py`
   duplicates `schemas/bronze.py`. Tell Biyush, and close the branch.
+- **`quarantined_files` (Silver) is built** for the ETL to record ClamAV hits
+  (`SilverRepository.quarantine`, or raise `pgs_db.etl.Infected` from a transform), and
+  for the API's security endpoints (`QuarantineRepository`). Nobody runs ClamAV yet, and
+  the ETL README's Stage 2 still places the scan on the scraper side: settle that with
+  both teams (contract §10 q9).
 - **Next to build: Gold.** `geo_content_stats` and `domain_stats` first (the API's map and
   admin endpoints need them; no PostGIS needed), then enable PostGIS for
   `search_documents` / `document_geo`.
@@ -246,12 +251,12 @@ export DATABASE_URL=postgresql+psycopg://pgs:pgs@localhost:5432/pgs
 
 python -m alembic upgrade head        # create all tables
 python scripts/seed_geography.py      # 7 provinces, 77 districts, 753 local bodies
-python -m pytest                      # 184 tests should pass
+python -m pytest                      # 199 tests should pass
 ```
 
 The tests need a live database: they read `DATABASE_URL` and each test runs in a transaction that
 is rolled back. Without `DATABASE_URL` set, the suite skips rather than fails, so check that
-tests actually ran (`184 passed`), not just that the command exited green.
+tests actually ran (`199 passed`), not just that the command exited green.
 
 Look inside the database:
 

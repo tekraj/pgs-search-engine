@@ -44,6 +44,7 @@ from ..enums import (
     Language,
     MediaType,
     ProcessingStatus,
+    QuarantineStatus,
 )
 from ._types import str_enum
 from .crawl import CrawledDocument, StoredFile
@@ -396,3 +397,64 @@ class PageEmbedding(IdMixin, TimestampMixin, Base):
     )
 
     page: Mapped[Page] = relationship(back_populates="embeddings")
+
+
+class QuarantinedFile(IdMixin, TimestampMixin, Base):
+    """A payload ClamAV flagged during ETL, moved to the quarantine bucket.
+
+    Written by the ETL when its virus scan of a claimed Bronze row fails
+    (`SilverRepository.quarantine`); read by the API's admin security endpoints.
+    The Bronze row is parked as QUARANTINED so it is never claimed again, and no
+    page is built from it. Deleting the object (admin action) keeps this row as
+    the audit record, with status DELETED.
+    """
+
+    __tablename__ = "quarantined_files"
+    __table_args__ = (
+        # One source when written; both NULL once Bronze retention deletes it (SET
+        # NULL), so the audit record outlives the raw row.
+        CheckConstraint(
+            "num_nonnulls(crawled_document_id, stored_file_id) <= 1", name="at_most_one_source"
+        ),
+        # Rescanning the same file updates its record instead of adding one.
+        UniqueConstraint(
+            "document_url", "sha256", name="uq_quarantined_files_document_url_sha256"
+        ),
+        CheckConstraint("size_bytes IS NULL OR size_bytes >= 0", name="size_non_negative"),
+        Index("ix_quarantined_files_status_scanned_at", "status", "scanned_at"),
+    )
+
+    # The Bronze row that carried the payload: a crawled page or a stored file.
+    crawled_document_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("crawled_documents.id", ondelete="SET NULL"), index=True
+    )
+    stored_file_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("stored_files.id", ondelete="SET NULL"), index=True
+    )
+    domain_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("domains.id"), index=True
+    )
+
+    document_url: Mapped[str] = mapped_column(Text)  # what was downloaded
+    source_page_url: Mapped[str | None] = mapped_column(Text)  # the page that linked it
+    original_path: Mapped[str | None] = mapped_column(Text)  # where it sat in the raw bucket
+    quarantine_path: Mapped[str] = mapped_column(Text)  # s3://quarantine-lake/...
+    sha256: Mapped[str] = mapped_column(String(64), index=True)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    content_type: Mapped[str | None] = mapped_column(String(255))
+
+    threat_signature: Mapped[str] = mapped_column(Text)  # e.g. Win.Trojan.Generic-998
+    scanner_engine: Mapped[str] = mapped_column(String(64), default="ClamAV")
+    scanner_version: Mapped[str | None] = mapped_column(String(64))
+    scanned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    status: Mapped[QuarantineStatus] = mapped_column(
+        str_enum(QuarantineStatus, "quarantine_status"),
+        default=QuarantineStatus.QUARANTINED,
+        server_default=QuarantineStatus.QUARANTINED.value,
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Free text until admin_users exists: the admin's username or email.
+    deleted_by: Mapped[str | None] = mapped_column(String(255))
+
+    domain: Mapped[Domain | None] = relationship()

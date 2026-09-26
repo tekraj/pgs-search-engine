@@ -13,6 +13,7 @@ from .silver import (
     PageGeoTag,
     PageMedia,
     PageSource,
+    QuarantinedFile,
 )
 
 __all__ = [
@@ -34,5 +35,6 @@ __all__ = [
     "Entity",
     "PageEntity",
     "PageEmbedding",
+    "QuarantinedFile",
     "EMBEDDING_DIM",
 ]

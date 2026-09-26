@@ -30,6 +30,7 @@ from ..enums import (
     Language,
     MediaType,
     ProcessingStatus,
+    QuarantineStatus,
 )
 from ..models import (
     EMBEDDING_DIM,
@@ -42,6 +43,7 @@ from ..models import (
     PageGeoTag,
     PageMedia,
     PageSource,
+    QuarantinedFile,
     StoredFile,
 )
 from ._mapping import blank_to_none, parse_timestamp
@@ -873,6 +875,110 @@ class SilverRepository:
             )
             released += result.rowcount
         return released
+
+    # ------------------------------------------------------------ quarantine
+
+    def quarantine(
+        self,
+        *,
+        threat_signature: str,
+        quarantine_path: str,
+        crawled_document_id: int | None = None,
+        stored_file_id: int | None = None,
+        scanner_engine: str = "ClamAV",
+        scanner_version: str | None = None,
+        scanned_at: datetime | None = None,
+    ) -> SaveResult:
+        """Record that ClamAV flagged a claimed Bronze row, and take it out of the pipeline.
+
+        Call after moving the object to the quarantine bucket (`quarantine_path`).
+        URL, hash, size and domain are copied from the Bronze row. The row is set
+        to QUARANTINED, so it is never claimed again, and a page already built from
+        it is deleted, so search never links to the file. Rescanning the same file
+        (same `document_url` + `sha256`) updates its record; if an admin had
+        deleted it, it is quarantined again.
+        """
+        if (crawled_document_id is None) == (stored_file_id is None):
+            raise ValueError("pass exactly one of crawled_document_id or stored_file_id")
+        if not blank_to_none(threat_signature):
+            raise ValueError("quarantine needs a threat_signature")
+        if not blank_to_none(quarantine_path):
+            raise ValueError("quarantine needs the quarantine_path of the isolated object")
+
+        model: type[CrawledDocument] | type[StoredFile]
+        if crawled_document_id is not None:
+            doc = self.session.get(CrawledDocument, crawled_document_id)
+            if doc is None:
+                raise LookupError(f"crawled document {crawled_document_id} does not exist")
+            model, row_id = CrawledDocument, doc.id
+            details = {
+                "document_url": doc.url,
+                "source_page_url": None,
+                "original_path": doc.minio_path,
+                "sha256": doc.content_hash,
+                "size_bytes": None,
+                "content_type": doc.content_type,
+                "domain_id": doc.domain_id,
+            }
+        else:
+            stored = self.session.get(StoredFile, stored_file_id)
+            if stored is None:
+                raise LookupError(f"stored file {stored_file_id} does not exist")
+            model, row_id = StoredFile, stored.id
+            details = {
+                "document_url": stored.document_url,
+                "source_page_url": stored.source_page_url,
+                "original_path": stored.storage_path,
+                "sha256": stored.sha256,
+                "size_bytes": stored.size_bytes,
+                "content_type": stored.content_type,
+                "domain_id": (
+                    stored.crawled_document.domain_id if stored.crawled_document else None
+                ),
+            }
+
+        values = {
+            **details,
+            "crawled_document_id": crawled_document_id,
+            "stored_file_id": stored_file_id,
+            "quarantine_path": quarantine_path,
+            "threat_signature": threat_signature,
+            "scanner_engine": scanner_engine,
+            "scanner_version": scanner_version,
+            "scanned_at": scanned_at or datetime.now(UTC),
+            "status": QuarantineStatus.QUARANTINED,
+            "deleted_at": None,
+            "deleted_by": None,
+        }
+        stmt = insert(QuarantinedFile).values(values)
+        found = self.session.execute(
+            stmt.on_conflict_do_update(
+                constraint="uq_quarantined_files_document_url_sha256",
+                set_={
+                    col: getattr(stmt.excluded, col)
+                    for col in values
+                    if col not in ("document_url", "sha256")
+                },
+            ).returning(QuarantinedFile.id, text("(xmax = 0)"))
+        ).one()
+
+        self.session.execute(
+            update(model)
+            .where(model.id == row_id)
+            .values(
+                processing_status=ProcessingStatus.QUARANTINED,
+                processing_error=f"quarantined: {threat_signature}",
+            ),
+            execution_options={"synchronize_session": False},
+        )
+        source_column = (
+            Page.crawled_document_id if crawled_document_id is not None else Page.stored_file_id
+        )
+        self.session.execute(
+            delete(Page).where(source_column == row_id),
+            execution_options={"synchronize_session": False},
+        )
+        return SaveResult(id=int(found[0]), inserted=bool(found[1]))
 
     # ------------------------------------------------------ deduplication
 

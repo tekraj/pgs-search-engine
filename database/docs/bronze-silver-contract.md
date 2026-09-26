@@ -2,10 +2,11 @@
 
 How the Spark ETL reads Bronze and writes Silver. The Python reference implementation
 is `pgs_db.repositories.SilverRepository`; `tests/test_silver.py` and
-`tests/test_etl_support.py` and `tests/test_silver_complete.py` prove every rule below against a real PostgreSQL, using
+`tests/test_etl_support.py`, `tests/test_silver_complete.py` and `tests/test_quarantine.py`
+prove every rule below against a real PostgreSQL, using
 payloads in the `ETL/spark/README.md` §5.2 shape.
 
-Schema version: Alembic revision `ac08008a1fbf`.
+Schema version: Alembic revision `8aa170eaaf03`.
 
 ```text
 crawled_documents          stored_files
@@ -342,6 +343,46 @@ RETURNING *;
 
 ---
 
+### Infected payloads → `quarantined_files`
+
+The ETL scans each claimed payload with ClamAV before parsing it. When the scan flags
+it: move the object to the quarantine bucket, then record it.
+
+```python
+# With pgs_db.etl: raise from the transform, and the loop records it.
+from pgs_db.etl import Infected
+
+def transform_pdf(stored):
+    data = minio.get(stored.storage_path)
+    verdict = clamav.scan(data)
+    if verdict.infected:
+        path = move_to_quarantine(stored.storage_path)     # s3://quarantine-lake/...
+        raise Infected(verdict.signature, path, scanner_version=verdict.version)
+    return {"searchable_text": extract_text(data), ...}
+
+# By hand, inside the row's transaction:
+repo.quarantine(stored_file_id=f.id, threat_signature="Win.Trojan.Generic-998",
+                quarantine_path="s3://quarantine-lake/update.exe", scanner_version="ClamAV 1.4.0")
+```
+
+`quarantine(...)` (exactly one of `crawled_document_id` / `stored_file_id`):
+
+- copies URL, linking page, raw path, `sha256`, size, content type and domain from
+  the Bronze row into `quarantined_files`;
+- sets the Bronze row to **`QUARANTINED`** (`processing_error = "quarantined: <signature>"`),
+  a status no claim ever picks up, so it is not retried like a FAILED row;
+- **deletes a page already built from that row**, so search never links to the file;
+- on a rescan of the same file (`document_url` + `sha256`) updates the one record, and
+  puts it back to `QUARANTINED` if an admin had deleted it.
+
+Records survive Bronze retention: both Bronze links are `ON DELETE SET NULL`.
+
+The API reads it through `pgs_db.QuarantineRepository`: `list_quarantined(status, domain_id,
+limit, offset)` for `GET /api/v1/admin/security/quarantine`, `summary()` for the dashboard's
+`quarantine_store` block (`count`, `size_mb`, `latest_threat_detected`), and
+`mark_deleted(id, deleted_by=...)` after the admin erases the object (the row stays,
+as the audit record, with status `DELETED`).
+
 ## 5. Identity, recrawls and reprocessing
 
 | Level | Key | Meaning |
@@ -424,7 +465,8 @@ Stored as `VARCHAR` + `CHECK`, like every enum in `pgs_db.enums`.
 | `Language` | `NE`, `EN`, `MIXED`, `OTHER` |
 | `GeoTagMethod` | `GAZETTEER` (name matched in text), `NER`, `DOMAIN` (site belongs to a local body), `GEO_META` (geo meta tags / structured data) |
 | `ContactType` | `EMAIL`, `PHONE`, `SOCIAL` |
-| `ProcessingStatus` | `UNPROCESSED`, `PROCESSING`, `PROCESSED`, `FAILED` |
+| `ProcessingStatus` | `UNPROCESSED`, `PROCESSING`, `PROCESSED`, `FAILED`, `QUARANTINED` (Bronze only) |
+| `QuarantineStatus` | `QUARANTINED`, `DELETED` |
 
 ---
 
@@ -475,3 +517,8 @@ codes in the shape the `geo_location` block expects.
    the payload or by a separate job using `pages_missing_embeddings`. Note that
    `all-MiniLM-L6-v2` is English-only: Nepali text will embed poorly. A multilingual
    384-dimension model (`paraphrase-multilingual-MiniLM-L12-v2`) keeps the same column.
+9. **Where the ClamAV scan runs.** `ETL/spark/README.md` Stage 2 puts it before MinIO and
+   Kafka (scraper side), so infected files would never reach the ETL. `quarantined_files`
+   is written by the ETL instead, scanning each payload as it claims it. Update Stage 2
+   to match, or the scraper keeps scanning too and writes the same table (its rows would
+   have no Bronze link).

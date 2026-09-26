@@ -15,6 +15,8 @@ class ProcessingStatus(enum.StrEnum):
     PROCESSING = "PROCESSING"
     PROCESSED = "PROCESSED"
     FAILED = "FAILED"
+    # Bronze only: ClamAV flagged the payload. Never claimed again; see quarantined_files.
+    QUARANTINED = "QUARANTINED"
 
 
 class DomainStatus(enum.StrEnum):
@@ -93,3 +95,10 @@ class EntityType(enum.StrEnum):
     ORGANIZATION = "ORGANIZATION"
     EVENT = "EVENT"
     OTHER = "OTHER"
+
+
+class QuarantineStatus(enum.StrEnum):
+    """State of a `quarantined_files` row."""
+
+    QUARANTINED = "QUARANTINED"  # isolated in the quarantine bucket
+    DELETED = "DELETED"  # an admin erased the object; the row stays as the audit record

@@ -18,6 +18,7 @@ Every table also has `created_at` and `updated_at` (timestamptz, UTC). Enum colu
 | `document_embeddings` (Gold) → `page_embeddings` (Silver) | `search_documents` is 1:1 with `pages`, so keying embeddings on the page removes a hop and lets ETL write them before Gold exists. Stored in Postgres with pgvector, 384 dimensions: the search team's query model (`all-MiniLM-L6-v2`) and their `pgvector_search.py` set both. |
 | Geo links use **codes**, not ids | `page_geo_tags` references `provinces.code` / `districts.code` / `local_bodies.code`, the codes ETL and search already exchange (`P4`, `D38`, `MUN414`). Gold follows the same rule. |
 | A page's source is a crawled page **or** a stored file | `pages.stored_file_id` (CHECK: exactly one of it and `crawled_document_id`) so PDFs and images in MinIO become searchable pages. |
+| `quarantined_files` in Silver, not Bronze | The ETL scans each payload as it claims it and records ClamAV hits; the Bronze row is parked as `QUARANTINED`. |
 | `entities.type` has no LOCATION | Places are `page_geo_tags` against the gazetteer; a second place list would drift from it. |
 | `page_geo_mentions` → `page_geo_tags`, plus `page_contacts` | As built. `page_geo_tags` adds `ward_number`, drops `char_start`/`char_end`. `page_contacts` holds per-page emails, phones and social links. |
 
@@ -149,6 +150,9 @@ erDiagram
     stored_files |o--o{ page_media : "file for"
     pages ||--o{ page_entities : mentions
     entities ||--o{ page_entities : "mentioned in"
+    stored_files |o--o{ quarantined_files : "flagged as"
+    crawled_documents |o--o{ quarantined_files : "flagged as"
+    domains |o--o{ quarantined_files : hosted
 
     pages {
         bigint id PK
@@ -235,6 +239,26 @@ erDiagram
         bigint entity_id FK
         int mention_count
         float salience "0..1"
+    }
+    quarantined_files {
+        bigint id PK
+        bigint crawled_document_id FK "at most one source; SET NULL"
+        bigint stored_file_id FK
+        bigint domain_id FK
+        text document_url UK "UQ with sha256"
+        text source_page_url
+        text original_path
+        text quarantine_path "s3://quarantine-lake/..."
+        varchar sha256 UK
+        bigint size_bytes
+        varchar content_type
+        text threat_signature
+        varchar scanner_engine
+        varchar scanner_version
+        timestamptz scanned_at
+        varchar status "QUARANTINED, DELETED"
+        timestamptz deleted_at
+        varchar deleted_by
     }
 ```
 

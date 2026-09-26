@@ -36,6 +36,8 @@ from .geography import (
     ProvinceUpdate,
 )
 from .silver import (
+    QuarantinedFileRead,
+    QuarantineSummary,
     EntityBase,
     EntityCreate,
     EntityRead,
@@ -109,6 +111,8 @@ __all__ = [
     "PageMediaCreate",
     "PageMediaRead",
     "PageSourceRead",
+    "QuarantinedFileRead",
+    "QuarantineSummary",
     # geography
     "ProvinceBase",
     "ProvinceCreate",
