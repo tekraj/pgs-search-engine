@@ -24,3 +24,10 @@ def get_extension(filename: str) -> str:
     if "." not in filename:
         return ""
     return filename.rsplit(".", 1)[-1].lower()
+
+def get_file_size(content: bytes) -> int:
+    return len(content)
+
+
+def get_sha256(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
