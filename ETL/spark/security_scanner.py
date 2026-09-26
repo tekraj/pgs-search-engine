@@ -5,7 +5,10 @@ project demo. Real malware scanning (ClamAV) is separate, later work.
 """
 
 import hashlib
-from typing import TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
+
+if TYPE_CHECKING:
+    from pyspark.sql import DataFrame
 
 # Extensions we treat as risky to auto-run/auto-open.
 SUSPICIOUS_EXTENSIONS = {
@@ -94,7 +97,7 @@ def scan_file(filename: str, content: bytes) -> ScanResult:
         "reasons": reasons,
     }
     
-def scan_file_spark(spark, filename: str, content: bytes):
+def scan_file_spark(spark: Any, filename: str, content: bytes) -> "DataFrame":
     """Same as scan_file(), but wraps the result in a Spark DataFrame -
     matches the pattern used by analyze_text() in transform.py so both
     modules look and behave the same way."""
@@ -112,7 +115,7 @@ if __name__ == "__main__":
     from pyspark.sql import SparkSession
     from security_scanner import scan_file_spark
 
-    spark = (
+    spark: SparkSession = (
         SparkSession.builder
         .appName("SecurityScannerTest")
         .master("local[*]")
@@ -125,10 +128,12 @@ if __name__ == "__main__":
         "hello.txt": b"This is a normal file used to test the Spark Security Scanner.",
         "notice.pdf": b"%PDF-1.4 dummy pdf content for testing",
         "photo.jpg": b"dummy jpeg bytes for testing",
+        "weird_report.xyz": b"harmless content with an unusual extension",
     }
 
     for filename, content in test_files.items():
         df = scan_file_spark(spark, filename, content)
-        df.show(truncate=60)
+        df.show(truncate=60)  # type: ignore[union-attr]
 
     spark.stop()
+        
