@@ -2,8 +2,29 @@ from typing import Any
 
 from opensearchpy import OpenSearch
 
+# NOTE: confirm this with the ETL team -- their documented Spark output
+# schema (ETL/spark/README.md, section 5.2) doesn't show a timestamp
+# field on the indexed document. "scraped_at" appears on the raw MinIO
+# payload (storage_metadata.scraped_at) but it's not shown carried
+# through to the final OpenSearch document. Ask: what field (if any)
+# marks when a document was scraped/published, so "latest first" can
+# sort on it. Also currently missing from Rabin's gRPC SearchResultItem
+# / SearchHit -- needs adding there too once a field name is settled.
 DEFAULT_DATE_FIELD = "scraped_at"
 
+# NOTE: same open question as the date field -- content_type doesn't
+# clearly appear on ETL's documented final document schema either
+# (only "content_type" on the raw MinIO payload's storage_metadata).
+# Confirm the real field name with ETL. This matches the
+# `content_type` param name already used in Rabin's SearchRequest
+# proto (search-engine/proto/search.proto), so no renaming needed
+# once the actual field is confirmed.
+DEFAULT_CONTENT_TYPE_FIELD = "content_type"
+
+# Geo fields are nested under geo_location in the ETL's documented
+# output schema (ETL/spark/README.md, section 5.2). Names match
+# Rabin's SearchRequest proto fields exactly (province_code,
+# district_code, municipality_id, ward_number).
 GEO_FIELD_MAP = {
     "province_code": "geo_location.province_code",
     "district_code": "geo_location.district_code",
@@ -28,33 +49,46 @@ class GeoFilteredSearch:
         recency as a tie-breaker.
     """
 
-    def __init__(self, client: OpenSearch, index: str, date_field: str = DEFAULT_DATE_FIELD):
+    def __init__(
+        self,
+        client: OpenSearch,
+        index: str,
+        date_field: str = DEFAULT_DATE_FIELD,
+        content_type_field: str = DEFAULT_CONTENT_TYPE_FIELD,
+    ):
         self.client = client
         self.index = index
         self.date_field = date_field
+        self.content_type_field = content_type_field
 
     def browse(
         self,
         province_code: str | None = None,
         district_code: str | None = None,
         municipality_id: str | None = None,
-        ward_number: str | None = None,
+        ward_number: int | None = None,
+        content_type: str | None = None,
         query: str | None = None,
         k: int = 20,
         offset: int = 0,
-    ) -> list[dict[str, Any]]:
-        """Return up to `k` documents matching the given geo filters.
+    ) -> dict[str, Any]:
+        """Return documents matching the given geo/content-type filters.
+
+        Returns a dict shaped to match Rabin's SearchOutput
+        (search-engine/src/pgs_search/grpc/pipeline_adapter.py):
+            {"total_hits": int, "results": [{"document_id", "score", "source"}, ...]}
 
         At least one geo filter should normally be passed -- calling
         this with none is equivalent to "browse everything, newest
         first" and is allowed, but is rarely what you want for a
         region-bounded search.
         """
-        filter_clauses = self._build_geo_filters(
+        filter_clauses = self._build_filters(
             province_code=province_code,
             district_code=district_code,
             municipality_id=municipality_id,
             ward_number=ward_number,
+            content_type=content_type,
         )
 
         bool_query: dict[str, Any] = {}
@@ -85,11 +119,12 @@ class GeoFilteredSearch:
             "from": offset,
             "query": {"bool": bool_query},
             "sort": sort_clauses,
+            "track_total_hits": True,
         }
 
         response = self.client.search(index=self.index, body=body)
 
-        return [
+        results = [
             {
                 "document_id": hit["_id"],
                 "score": hit.get("_score"),
@@ -98,21 +133,32 @@ class GeoFilteredSearch:
             for hit in response["hits"]["hits"]
         ]
 
-    @staticmethod
-    def _build_geo_filters(
+        return {
+            "total_hits": response["hits"]["total"]["value"],
+            "results": results,
+        }
+
+    def _build_filters(
+        self,
         province_code: str | None,
         district_code: str | None,
         municipality_id: str | None,
-        ward_number: str | None,
+        ward_number: int | None,
+        content_type: str | None,
     ) -> list[dict[str, Any]]:
-        values = {
+        geo_values = {
             "province_code": province_code,
             "district_code": district_code,
             "municipality_id": municipality_id,
             "ward_number": ward_number,
         }
-        return [
+        clauses = [
             {"term": {GEO_FIELD_MAP[field]: value}}
-            for field, value in values.items()
+            for field, value in geo_values.items()
             if value is not None
         ]
+
+        if content_type is not None:
+            clauses.append({"term": {self.content_type_field: content_type}})
+
+        return clauses

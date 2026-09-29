@@ -5,10 +5,8 @@ from geo_filter_search import GeoFilteredSearch
 
 INDEX_NAME = "nepal_test_documents_geo"
 
-# NOTE: "scraped_at" is a placeholder date field name -- confirm the
-# real field name with the ETL team once their indexed document schema
-# includes a timestamp. See the NOTE in geo_filter_search.py.
 DATE_FIELD = "scraped_at"
+CONTENT_TYPE_FIELD = "content_type"
 
 
 # Connect to local OpenSearch
@@ -19,8 +17,9 @@ client = OpenSearch(
 )
 
 
-# Sample documents across different regions and dates, matching the
-# ETL team's documented geo_location shape (ETL/README.md, section 5.2)
+# Sample documents across different regions, dates, and content types,
+# matching the ETL team's documented geo_location shape
+# (ETL/spark/README.md, section 5.2)
 documents = [
     {
         "title": "Pokhara Metropolitan City Notice",
@@ -30,7 +29,9 @@ documents = [
             "province_code": "P4",
             "district_code": "D39",
             "municipality_id": "MUN75340",
+            "ward_number": 5,
         },
+        "content_type": "web_page",
         "scraped_at": "2026-09-20T10:00:00Z",
     },
     {
@@ -41,7 +42,9 @@ documents = [
             "province_code": "P4",
             "district_code": "D39",
             "municipality_id": "MUN75340",
+            "ward_number": 5,
         },
+        "content_type": "web_page",
         "scraped_at": "2026-09-23T08:00:00Z",
     },
     {
@@ -52,7 +55,9 @@ documents = [
             "province_code": "P3",
             "district_code": "D27",
             "municipality_id": "MUN27001",
+            "ward_number": 2,
         },
+        "content_type": "web_page",
         "scraped_at": "2026-09-22T09:00:00Z",
     },
     {
@@ -63,7 +68,9 @@ documents = [
             "province_code": "P4",
             "district_code": "D39",
             "municipality_id": "MUN75341",
+            "ward_number": 1,
         },
+        "content_type": "pdf",
         "scraped_at": "2026-09-18T12:00:00Z",
     },
 ]
@@ -77,12 +84,13 @@ def create_index():
                 "description": {"type": "text"},
                 "text": {"type": "text"},
                 "scraped_at": {"type": "date"},
+                "content_type": {"type": "keyword"},
                 "geo_location": {
                     "properties": {
                         "province_code": {"type": "keyword"},
                         "district_code": {"type": "keyword"},
                         "municipality_id": {"type": "keyword"},
-                        "ward_number": {"type": "keyword"},
+                        "ward_number": {"type": "integer"},
                     }
                 },
             }
@@ -105,14 +113,16 @@ def insert_documents():
         )
 
 
-def print_results(label: str, results: list[dict]) -> None:
+def print_results(label: str, response: dict) -> None:
     print(f"\n{label}")
+    print(f"Total hits: {response['total_hits']}")
     print("-" * 60)
 
-    for rank, result in enumerate(results, start=1):
+    for rank, result in enumerate(response["results"], start=1):
         source = result["source"]
         print(f"{rank}. {source['title']}")
         print(f"   Scraped at: {source['scraped_at']}")
+        print(f"   Content type: {source['content_type']}")
         print(f"   Geo: {source['geo_location']}")
         print(f"   Score: {result['score']}")
         print()
@@ -122,16 +132,16 @@ def run_geo_browse():
     """Pure geo browse, no text query -- newest first within the region."""
     searcher = GeoFilteredSearch(client=client, index=INDEX_NAME, date_field=DATE_FIELD)
 
-    results = searcher.browse(district_code="D39", k=5)
-    print_results("Browse: district_code=D39 (Kaski), newest first", results)
+    response = searcher.browse(district_code="D39", k=5)
+    print_results("Browse: district_code=D39 (Kaski), newest first", response)
 
 
 def run_geo_browse_narrower():
     """Narrower geo filter -- down to municipality level."""
     searcher = GeoFilteredSearch(client=client, index=INDEX_NAME, date_field=DATE_FIELD)
 
-    results = searcher.browse(municipality_id="MUN75340", k=5)
-    print_results("Browse: municipality_id=MUN75340 (Pokhara Metro), newest first", results)
+    response = searcher.browse(municipality_id="MUN75340", k=5)
+    print_results("Browse: municipality_id=MUN75340 (Pokhara Metro), newest first", response)
 
 
 def run_geo_filtered_text_search():
@@ -139,8 +149,24 @@ def run_geo_filtered_text_search():
     as the tie-breaker."""
     searcher = GeoFilteredSearch(client=client, index=INDEX_NAME, date_field=DATE_FIELD)
 
-    results = searcher.browse(district_code="D39", query="tourism", k=5)
-    print_results("Search 'tourism' within district_code=D39", results)
+    response = searcher.browse(district_code="D39", query="tourism", k=5)
+    print_results("Search 'tourism' within district_code=D39", response)
+
+
+def run_geo_and_content_type_filter():
+    """Geo filter combined with content_type -- e.g. only PDFs in Kaski."""
+    searcher = GeoFilteredSearch(client=client, index=INDEX_NAME, date_field=DATE_FIELD)
+
+    response = searcher.browse(district_code="D39", content_type="pdf", k=5)
+    print_results("Browse: district_code=D39, content_type=pdf", response)
+
+
+def run_ward_number_filter():
+    """Filter down to a specific ward number (now an int, matching the proto)."""
+    searcher = GeoFilteredSearch(client=client, index=INDEX_NAME, date_field=DATE_FIELD)
+
+    response = searcher.browse(district_code="D39", ward_number=5, k=5)
+    print_results("Browse: district_code=D39, ward_number=5", response)
 
 
 def main():
@@ -155,6 +181,8 @@ def main():
     run_geo_browse()
     run_geo_browse_narrower()
     run_geo_filtered_text_search()
+    run_geo_and_content_type_filter()
+    run_ward_number_filter()
 
 
 if __name__ == "__main__":
