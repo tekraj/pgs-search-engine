@@ -1,7 +1,7 @@
 import { Newspaper } from "lucide-react";
 import { generateMockNews } from "@/lib/mock/news";
 
-export function NewsPopupContent({ place }: { place: string }) {
+export function NewsPopupContent({ place, listMaxHeight }: { place: string; listMaxHeight?: number }) {
   const news = generateMockNews(place, 4);
 
   return (
@@ -10,7 +10,10 @@ export function NewsPopupContent({ place }: { place: string }) {
         <Newspaper className="h-4 w-4 text-blue-600" />
         Latest news · {place}
       </div>
-      <ul className="max-h-64 space-y-2 overflow-y-auto">
+      <ul
+        className="max-h-64 space-y-2 overflow-y-auto"
+        style={listMaxHeight ? { maxHeight: listMaxHeight } : undefined}
+      >
         {news.map((item) => (
           <li key={item.id} className="border-b border-slate-100 pb-2 last:border-0 last:pb-0">
             <p className="text-sm font-medium leading-snug text-slate-900">{item.title}</p>
