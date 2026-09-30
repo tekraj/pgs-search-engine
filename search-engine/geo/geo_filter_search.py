@@ -2,35 +2,36 @@ from typing import Any
 
 from opensearchpy import OpenSearch
 
-# NOTE: confirm this with the ETL team -- their documented Spark output
-# schema (ETL/spark/README.md, section 5.2) doesn't show a timestamp
-# field on the indexed document. "scraped_at" appears on the raw MinIO
-# payload (storage_metadata.scraped_at) but it's not shown carried
-# through to the final OpenSearch document. Ask: what field (if any)
-# marks when a document was scraped/published, so "latest first" can
-# sort on it. Also currently missing from Rabin's gRPC SearchResultItem
-# / SearchHit -- needs adding there too once a field name is settled.
 DEFAULT_DATE_FIELD = "scraped_at"
 
-# NOTE: same open question as the date field -- content_type doesn't
-# clearly appear on ETL's documented final document schema either
-# (only "content_type" on the raw MinIO payload's storage_metadata).
-# Confirm the real field name with ETL. This matches the
-# `content_type` param name already used in Rabin's SearchRequest
-# proto (search-engine/proto/search.proto), so no renaming needed
-# once the actual field is confirmed.
+
 DEFAULT_CONTENT_TYPE_FIELD = "content_type"
 
-# Geo fields are nested under geo_location in the ETL's documented
-# output schema (ETL/spark/README.md, section 5.2). Names match
-# Rabin's SearchRequest proto fields exactly (province_code,
-# district_code, municipality_id, ward_number).
 GEO_FIELD_MAP = {
     "province_code": "geo_location.province_code",
     "district_code": "geo_location.district_code",
     "municipality_id": "geo_location.municipality_id",
     "ward_number": "geo_location.ward_number",
 }
+
+REGION_LEVEL_FIELDS = {
+    "province": ("geo_location.province_code", "geo_location.province_name_en"),
+    "district": ("geo_location.district_code", "geo_location.district_name_en"),
+    "municipality": ("geo_location.municipality_id", "geo_location.municipality_name_en"),
+}
+
+
+def _get_nested(source: dict[str, Any], dotted_field: str) -> Any:
+    """Pull a dotted-path value out of a nested dict, e.g.
+    "geo_location.province_name_en" -> source["geo_location"]["province_name_en"].
+    Returns None if any part of the path is missing.
+    """
+    value: Any = source
+    for part in dotted_field.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
 
 
 class GeoFilteredSearch:
@@ -137,6 +138,94 @@ class GeoFilteredSearch:
             "total_hits": response["hits"]["total"]["value"],
             "results": results,
         }
+
+    def count_by_region(
+        self,
+        level: str,
+        province_code: str | None = None,
+        district_code: str | None = None,
+        content_type: str | None = None,
+        query: str | None = None,
+        size: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Document counts grouped by region, for map-view aggregation
+        (e.g. a choropleth or marker density map).
+
+        `level` is one of "province", "district", "municipality" --
+        which code field to group by. `province_code`/`district_code`
+        scope the count to within a parent region (e.g. district
+        counts within a single province, for drill-down zoom), same
+        as the geo filters on `browse()`.
+
+        Returns a list sorted by count descending:
+            [{"code": "D39", "name": "Kaski", "count": 47}, ...]
+
+        `name` is None if no document in that bucket had the name
+        field populated (e.g. ETL hasn't backfilled it yet).
+        """
+        if level not in REGION_LEVEL_FIELDS:
+            raise ValueError(
+                f"Unknown level {level!r}, expected one of {sorted(REGION_LEVEL_FIELDS)}"
+            )
+
+        code_field, name_field = REGION_LEVEL_FIELDS[level]
+
+        filter_clauses = self._build_filters(
+            province_code=province_code,
+            district_code=district_code,
+            municipality_id=None,
+            ward_number=None,
+            content_type=content_type,
+        )
+
+        bool_query: dict[str, Any] = {}
+        if query:
+            bool_query["must"] = {
+                "multi_match": {
+                    "query": query,
+                    "fields": ["title^3", "text", "description"],
+                    "type": "best_fields",
+                }
+            }
+        else:
+            bool_query["must"] = {"match_all": {}}
+
+        if filter_clauses:
+            bool_query["filter"] = filter_clauses
+
+        body = {
+            "size": 0,
+            "query": {"bool": bool_query},
+            "aggs": {
+                "by_region": {
+                    "terms": {"field": code_field, "size": size},
+                    "aggs": {
+                        "sample_doc": {
+                            "top_hits": {"size": 1, "_source": [name_field]}
+                        }
+                    },
+                }
+            },
+        }
+
+        response = self.client.search(index=self.index, body=body)
+
+        buckets = response["aggregations"]["by_region"]["buckets"]
+        results = []
+        for bucket in buckets:
+            sample_hits = bucket["sample_doc"]["hits"]["hits"]
+            name = None
+            if sample_hits:
+                name = _get_nested(sample_hits[0]["_source"], name_field)
+            results.append(
+                {
+                    "code": bucket["key"],
+                    "name": name,
+                    "count": bucket["doc_count"],
+                }
+            )
+
+        return sorted(results, key=lambda r: r["count"], reverse=True)
 
     def _build_filters(
         self,
