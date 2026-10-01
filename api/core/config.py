@@ -6,8 +6,8 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
 
     
-    search_grpc_host: str = "localhost"
-    search_grpc_port: int = 50051
+    admin_grpc_host: str = "localhost"
+    admin_grpc_port: int = 50052
 
     jwt_secret_key: str = "change-me"
     jwt_algorithm: str = "HS256"

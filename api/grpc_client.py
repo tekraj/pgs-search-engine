@@ -50,3 +50,44 @@ class SearchGrpcClient:
 
     def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
         self.close()
+
+
+class AdminGrpcClient:
+    def __init__(self, host: str = ADMIN_DEFAULT_HOST, port: int = ADMIN_DEFAULT_PORT) -> None:
+        self.host = os.getenv("ADMIN_GRPC_HOST", host)
+        self.port = int(os.getenv("ADMIN_GRPC_PORT", str(port)))
+        self._channel = grpc.insecure_channel(f"{self.host}:{self.port}")
+        self._stub = search_admin_pb2_grpc.AdminMonitoringServiceStub(self._channel)
+
+    def get_domain_status(
+        self,
+        page: int = 1,
+        limit: int = 10,
+        filter_status: str = "",
+    ) -> search_admin_pb2.DomainStatusResponse:
+        request = search_admin_pb2.DomainStatusRequest(
+            page=page,
+            limit=limit,
+            filter_status=filter_status,
+        )
+        return self._stub.GetDomainStatus(request)
+
+    def manage_domain(
+        self,
+        domain_name: str,
+        action: str,
+    ) -> search_admin_pb2.ManageDomainResponse:
+        request = search_admin_pb2.ManageDomainRequest(
+            domain_name=domain_name,
+            action=action,
+        )
+        return self._stub.ManageDomain(request)
+
+    def close(self) -> None:
+        self._channel.close()
+
+    def __enter__(self) -> AdminGrpcClient:
+        return self
+
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+        self.close()
