@@ -1,4 +1,4 @@
-# API Gateway Specification & Service Contract
+                                  # API Gateway Specification & Service Contract
 
 ## FastAPI Gateway REST API & System Administration Manual
 
