@@ -1,6 +1,19 @@
 import os
+import logging
 import joblib
 import pandas as pd
+
+
+# ============================================================
+# Logging Configuration
+# ============================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -31,6 +44,11 @@ FEATURES = [
 # ============================================================
 
 if not os.path.exists(MODEL_PATH):
+
+    logger.error(
+        f"LightGBM model not found: {MODEL_PATH}"
+    )
+
     raise FileNotFoundError(
         f"LightGBM model not found:\n{MODEL_PATH}\n\n"
         "Please copy lightgbm_reranker.pkl into the tests folder."
@@ -38,7 +56,7 @@ if not os.path.exists(MODEL_PATH):
 
 model = joblib.load(MODEL_PATH)
 
-print("LightGBM model loaded successfully.")
+logger.info("LightGBM model loaded successfully.")
 
 
 # ============================================================
@@ -55,16 +73,31 @@ def prepare_features(results):
     Invalid values are replaced with 0.
     """
 
+    logger.info(
+        f"Preparing features for {len(results)} results."
+    )
+
     df = pd.DataFrame(results)
 
     # --------------------------------------------------------
     # Add missing features
     # --------------------------------------------------------
 
+    missing_features = []
+
     for feature in FEATURES:
 
         if feature not in df.columns:
+
             df[feature] = 0
+            missing_features.append(feature)
+
+    if missing_features:
+
+        logger.warning(
+            f"Missing features added with default value 0: "
+            f"{missing_features}"
+        )
 
 
     # --------------------------------------------------------
@@ -83,7 +116,18 @@ def prepare_features(results):
     # Replace missing or invalid values
     # --------------------------------------------------------
 
+    invalid_values = df[FEATURES].isna().sum().sum()
+
+    if invalid_values > 0:
+
+        logger.warning(
+            f"{invalid_values} missing or invalid feature values "
+            "were replaced with 0."
+        )
+
     df[FEATURES] = df[FEATURES].fillna(0)
+
+    logger.info("Feature preparation completed.")
 
     return df
 
@@ -111,17 +155,36 @@ def rerank_results(results, top_k=10):
         Re-ranked search results.
     """
 
+    logger.info("Starting LightGBM re-ranking process.")
+
+
     # --------------------------------------------------------
     # Validate results
     # --------------------------------------------------------
 
-    if not results:
-        return []
-
     if not isinstance(results, list):
+
+        logger.error(
+            "Invalid results type. Expected a list."
+        )
+
         raise TypeError(
             "results must be provided as a list."
         )
+
+
+    if not results:
+
+        logger.warning(
+            "No search results provided."
+        )
+
+        return []
+
+
+    logger.info(
+        f"Received {len(results)} search results."
+    )
 
 
     # --------------------------------------------------------
@@ -129,6 +192,11 @@ def rerank_results(results, top_k=10):
     # --------------------------------------------------------
 
     if not isinstance(top_k, int) or top_k <= 0:
+
+        logger.error(
+            f"Invalid top_k value: {top_k}"
+        )
+
         raise ValueError(
             "top_k must be a positive integer."
         )
@@ -142,19 +210,7 @@ def rerank_results(results, top_k=10):
 
 
     # --------------------------------------------------------
-    # Remove duplicate documents
-    # --------------------------------------------------------
-
-    if "id" in df.columns:
-
-        df = df.drop_duplicates(
-            subset=["id"],
-            keep="first"
-        )
-
-
-    # --------------------------------------------------------
-    # Store original ranking
+    # Store input ranking
     # --------------------------------------------------------
 
     df["original_rank"] = range(
@@ -164,8 +220,45 @@ def rerank_results(results, top_k=10):
 
 
     # --------------------------------------------------------
+    # Remove duplicate documents
+    # --------------------------------------------------------
+
+    original_count = len(df)
+
+    if "id" in df.columns:
+
+        df = df.drop_duplicates(
+            subset=["id"],
+            keep="first"
+        )
+
+    duplicate_count = original_count - len(df)
+
+    if duplicate_count > 0:
+
+        logger.warning(
+            f"Removed {duplicate_count} duplicate result(s)."
+        )
+
+    else:
+
+        logger.info(
+            "No duplicate results found."
+        )
+
+
+    logger.info(
+        f"Results after duplicate removal: {len(df)}"
+    )
+
+
+    # --------------------------------------------------------
     # Generate LightGBM prediction
     # --------------------------------------------------------
+
+    logger.info(
+        "Generating LightGBM ranking scores."
+    )
 
     df["rerank_score"] = model.predict(
         df[FEATURES]
@@ -181,7 +274,18 @@ def rerank_results(results, top_k=10):
         errors="coerce"
     )
 
-    df["rerank_score"] = df["rerank_score"].fillna(0)
+    invalid_scores = df["rerank_score"].isna().sum()
+
+    if invalid_scores > 0:
+
+        logger.warning(
+            f"{invalid_scores} invalid prediction score(s) "
+            "were replaced with 0."
+        )
+
+    df["rerank_score"] = df[
+        "rerank_score"
+    ].fillna(0)
 
 
     # --------------------------------------------------------
@@ -191,6 +295,11 @@ def rerank_results(results, top_k=10):
     df = df.sort_values(
         by="rerank_score",
         ascending=False
+    )
+
+
+    logger.info(
+        "Results sorted by LightGBM ranking score."
     )
 
 
@@ -217,9 +326,22 @@ def rerank_results(results, top_k=10):
     # Return Top K results
     # --------------------------------------------------------
 
-    return df.head(top_k).to_dict(
+    final_results = df.head(
+        top_k
+    ).to_dict(
         orient="records"
     )
+
+
+    logger.info(
+        f"Returning top {len(final_results)} results."
+    )
+
+    logger.info(
+        "LightGBM re-ranking completed successfully."
+    )
+
+    return final_results
 
 
 # ============================================================
@@ -229,7 +351,7 @@ def rerank_results(results, top_k=10):
 if __name__ == "__main__":
 
     print("\nTesting LightGBM re-ranker...")
-    print("-" * 80)
+    print("-" * 100)
 
 
     sample_results = [
@@ -381,6 +503,7 @@ if __name__ == "__main__":
             for result in results
         ]
 
+
         print(
             f"Highest rerank score: "
             f"{max(scores):.6f}"
@@ -395,6 +518,11 @@ if __name__ == "__main__":
             f"Average rerank score: "
             f"{sum(scores) / len(scores):.6f}"
         )
+
+
+        # ----------------------------------------------------
+        # Rank movement analysis
+        # ----------------------------------------------------
 
         improved = sum(
             1
@@ -414,6 +542,7 @@ if __name__ == "__main__":
             if result["rank_change"] < 0
         )
 
+
         print(
             f"Results improved: {improved}"
         )
@@ -431,4 +560,6 @@ if __name__ == "__main__":
         f"Total results returned: {len(results)}"
     )
 
-    print("Re-ranking completed successfully.")
+    print(
+        "Re-ranking completed successfully."
+    )
