@@ -53,7 +53,7 @@ def rerank_results(results, top_k=10):
     Parameters
     ----------
     results : list
-        Search results containing the LightGBM features.
+        Search results containing LightGBM features.
 
     top_k : int
         Number of results to return.
@@ -64,13 +64,50 @@ def rerank_results(results, top_k=10):
         Re-ranked search results.
     """
 
-    # No results
+    # ========================================================
+    # Validate input
+    # ========================================================
+
     if not results:
         return []
 
+    if not isinstance(results, list):
+        raise TypeError(
+            "results must be provided as a list."
+        )
 
+    if not isinstance(top_k, int) or top_k <= 0:
+        raise ValueError(
+            "top_k must be a positive integer."
+        )
+
+
+    # ========================================================
     # Convert search results into DataFrame
+    # ========================================================
+
     df = pd.DataFrame(results)
+
+
+    # ========================================================
+    # Remove duplicate documents
+    # ========================================================
+
+    if "id" in df.columns:
+        df = df.drop_duplicates(
+            subset=["id"],
+            keep="first"
+        )
+
+
+    # ========================================================
+    # Store original ranking
+    # ========================================================
+
+    df["original_rank"] = range(
+        1,
+        len(df) + 1
+    )
 
 
     # ========================================================
@@ -116,7 +153,7 @@ def rerank_results(results, top_k=10):
     # ========================================================
 
     df = df.sort_values(
-        "rerank_score",
+        by="rerank_score",
         ascending=False
     )
 
@@ -144,7 +181,10 @@ if __name__ == "__main__":
         {
             "id": 1,
             "title": "Kathmandu Tourism",
-            "content": "Information about tourism in Kathmandu Nepal.",
+            "content": (
+                "Information about tourism "
+                "in Kathmandu Nepal."
+            ),
 
             "bm25_score": 8.5,
             "vector_score": 0.91,
@@ -160,7 +200,10 @@ if __name__ == "__main__":
         {
             "id": 2,
             "title": "Travel in Nepal",
-            "content": "Information about travelling around Nepal.",
+            "content": (
+                "Information about travelling "
+                "around Nepal."
+            ),
 
             "bm25_score": 6.2,
             "vector_score": 0.85,
@@ -176,7 +219,10 @@ if __name__ == "__main__":
         {
             "id": 3,
             "title": "Nepal News",
-            "content": "Latest news and information from Nepal.",
+            "content": (
+                "Latest news and information "
+                "from Nepal."
+            ),
 
             "bm25_score": 5.1,
             "vector_score": 0.72,
@@ -187,12 +233,33 @@ if __name__ == "__main__":
             "language_match": 1,
             "query_term_ratio": 0.4,
             "content_length": 400
+        },
+
+        {
+            "id": 3,
+            "title": "Nepal News Duplicate",
+            "content": (
+                "Duplicate document for testing."
+            ),
+
+            "bm25_score": 4.8,
+            "vector_score": 0.70,
+            "title_match": 0,
+            "geo_match": 1,
+            "freshness": 0.90,
+            "source_authority": 0.80,
+            "language_match": 1,
+            "query_term_ratio": 0.3,
+            "content_length": 350
         }
 
     ]
 
 
+    # ========================================================
     # Run re-ranking
+    # ========================================================
+
     results = rerank_results(
         sample_results,
         top_k=10
@@ -204,7 +271,7 @@ if __name__ == "__main__":
     # ========================================================
 
     print("\nRe-ranked results:")
-    print("-" * 60)
+    print("-" * 70)
 
 
     for rank, result in enumerate(
@@ -213,12 +280,17 @@ if __name__ == "__main__":
     ):
 
         print(
-            f"Rank {rank} | "
+            f"New Rank: {rank} | "
+            f"Original Rank: {result.get('original_rank')} | "
             f"ID: {result.get('id')} | "
             f"Title: {result.get('title')} | "
             f"Score: {result['rerank_score']:.4f}"
         )
 
 
-    print("-" * 60)
+    print("-" * 70)
+    print(
+        f"Total results returned: {len(results)}"
+    )
+
     print("Re-ranking completed successfully.")
