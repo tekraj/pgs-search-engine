@@ -1,4 +1,5 @@
-import os
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 import lightgbm as lgb
@@ -8,22 +9,25 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import ndcg_score
 
 
-# Path of the project files
-BASE_DIR = r"C:\Users\Acer\Desktop\search\pgs-search-engine\search-engine\test"
+# Project paths
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+TEST_DIR = PROJECT_ROOT / "test"
 
-DATA_PATH = os.path.join(BASE_DIR, "ranking_traning_data.csv")
-MODEL_PATH = os.path.join(BASE_DIR, "lightgbm_reranker.pkl")
-IMPORTANCE_PATH = os.path.join(BASE_DIR, "feature_importance.csv")
-RESULTS_PATH = os.path.join(BASE_DIR, "reranked_results.csv")
+DATA_PATH = TEST_DIR / "ranking_traning_data.csv"
+MODEL_PATH = TEST_DIR / "lightgbm_reranker.pkl"
+IMPORTANCE_PATH = TEST_DIR / "feature_importance.csv"
+RESULTS_PATH = TEST_DIR / "reranked_results.csv"
 
 
 # Load the training data
+print("Loading training data...")
+
 df = pd.read_csv(DATA_PATH)
 
 print("Dataset shape:", df.shape)
 
 
-# Features that will be used by the ranking model
+# Features used by the ranking model
 FEATURES = [
     "bm25_score",
     "vector_score",
@@ -39,11 +43,12 @@ FEATURES = [
 TARGET = "label"
 
 
-# Check if all required columns are present
+# Check required columns
 required_columns = FEATURES + [TARGET, "query"]
 
 missing_columns = [
-    column for column in required_columns
+    column
+    for column in required_columns
     if column not in df.columns
 ]
 
@@ -58,8 +63,8 @@ df[FEATURES] = df[FEATURES].fillna(0)
 df[TARGET] = df[TARGET].fillna(0)
 
 
-# Split the data based on queries
-# This keeps documents from the same query in the same dataset
+# Split data based on queries
+# Documents from the same query stay in the same dataset.
 queries = df["query"].unique()
 
 train_queries, test_queries = train_test_split(
@@ -77,7 +82,7 @@ test_df = df[
 ].copy()
 
 
-# Sort the data by query
+# Sort data by query
 train_df = train_df.sort_values("query")
 test_df = test_df.sort_values("query")
 
@@ -94,7 +99,7 @@ X_test = test_df[FEATURES]
 y_test = test_df[TARGET]
 
 
-# Find the number of documents for each query
+# Find number of documents for each query
 train_groups = (
     train_df
     .groupby("query", sort=False)
@@ -109,11 +114,12 @@ test_groups = (
     .tolist()
 )
 
+
 print("Training groups:", train_groups)
 print("Testing groups:", test_groups)
 
 
-# Create the LightGBM ranking model
+# Create LightGBM ranking model
 model = lgb.LGBMRanker(
     objective="lambdarank",
     metric="ndcg",
@@ -146,11 +152,11 @@ model.fit(
 print("Training completed.")
 
 
-# Predict scores for the test documents
+# Predict ranking scores
 test_df["rerank_score"] = model.predict(X_test)
 
 
-# Calculate NDCG@5 for each query
+# Calculate NDCG@5
 scores = []
 
 for query, group in test_df.groupby("query"):
@@ -170,7 +176,7 @@ for query, group in test_df.groupby("query"):
     scores.append(score)
 
 
-# Calculate the average NDCG
+# Calculate average NDCG
 if scores:
     average_ndcg = np.mean(scores)
 
@@ -182,9 +188,11 @@ if scores:
         "Number of queries evaluated:",
         len(scores)
     )
+else:
+    print("\nNo queries available for NDCG evaluation.")
 
 
-# Check which features were important to the model
+# Feature importance
 importance = pd.DataFrame({
     "feature": FEATURES,
     "importance": model.feature_importances_
@@ -206,34 +214,34 @@ importance.to_csv(
 )
 
 
-# Sort the results using the predicted ranking score
+# Sort and save reranked results
 test_df = test_df.sort_values(
     ["query", "rerank_score"],
     ascending=[True, False]
 )
 
-
-# Save the reranked results
 test_df.to_csv(
     RESULTS_PATH,
     index=False
 )
 
 
-# Save the trained model
+# Save trained model
 joblib.dump(
     model,
     MODEL_PATH
 )
 
 
-print("\nModel saved as:")
+print("\n----------------------------------------")
+print("LightGBM reranking process completed.")
+print("----------------------------------------")
+
+print("\nModel saved at:")
 print(MODEL_PATH)
 
-print("\nReranked results saved as:")
+print("\nReranked results saved at:")
 print(RESULTS_PATH)
 
-print("\nFeature importance saved as:")
+print("\nFeature importance saved at:")
 print(IMPORTANCE_PATH)
-
-print("\nLightGBM reranking process completed.")
