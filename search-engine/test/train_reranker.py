@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 import lightgbm as lgb
@@ -7,15 +8,22 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import ndcg_score
 
 
-# Load data
-DATA_PATH = r"C:\Users\Acer\Desktop\search\pgs-search-engine\search-engine\test\ranking_traning_data.csv"
+# Path of the project files
+BASE_DIR = r"C:\Users\Acer\Desktop\search\pgs-search-engine\search-engine\test"
 
+DATA_PATH = os.path.join(BASE_DIR, "ranking_traning_data.csv")
+MODEL_PATH = os.path.join(BASE_DIR, "lightgbm_reranker.pkl")
+IMPORTANCE_PATH = os.path.join(BASE_DIR, "feature_importance.csv")
+RESULTS_PATH = os.path.join(BASE_DIR, "reranked_results.csv")
+
+
+# Load the training data
 df = pd.read_csv(DATA_PATH)
 
 print("Dataset shape:", df.shape)
 
 
-# Features used for ranking
+# Features that will be used by the ranking model
 FEATURES = [
     "bm25_score",
     "vector_score",
@@ -31,12 +39,27 @@ FEATURES = [
 TARGET = "label"
 
 
-# Clean missing values
+# Check if all required columns are present
+required_columns = FEATURES + [TARGET, "query"]
+
+missing_columns = [
+    column for column in required_columns
+    if column not in df.columns
+]
+
+if missing_columns:
+    raise ValueError(
+        f"These columns are missing: {missing_columns}"
+    )
+
+
+# Replace missing values with 0
 df[FEATURES] = df[FEATURES].fillna(0)
 df[TARGET] = df[TARGET].fillna(0)
 
 
-# Split data by query
+# Split the data based on queries
+# This keeps documents from the same query in the same dataset
 queries = df["query"].unique()
 
 train_queries, test_queries = train_test_split(
@@ -54,12 +77,16 @@ test_df = df[
 ].copy()
 
 
-# Keep documents of the same query together
+# Sort the data by query
 train_df = train_df.sort_values("query")
 test_df = test_df.sort_values("query")
 
 
-# Training data
+print("Training rows:", len(train_df))
+print("Testing rows:", len(test_df))
+
+
+# Select features and target
 X_train = train_df[FEATURES]
 y_train = train_df[TARGET]
 
@@ -67,7 +94,7 @@ X_test = test_df[FEATURES]
 y_test = test_df[TARGET]
 
 
-# Number of documents for each query
+# Find the number of documents for each query
 train_groups = (
     train_df
     .groupby("query", sort=False)
@@ -82,45 +109,48 @@ test_groups = (
     .tolist()
 )
 
-
 print("Training groups:", train_groups)
 print("Testing groups:", test_groups)
 
 
-# Create LightGBM ranking model
+# Create the LightGBM ranking model
 model = lgb.LGBMRanker(
     objective="lambdarank",
     metric="ndcg",
     ndcg_at=[5, 10],
     learning_rate=0.05,
-    n_estimators=200,
+    n_estimators=300,
     num_leaves=31,
     random_state=42,
     verbosity=-1
 )
 
 
-# Train model
-print("\nTraining LightGBM...")
+# Train the model
+print("\nTraining LightGBM model...")
 
 model.fit(
     X_train,
     y_train,
     group=train_groups,
     eval_set=[(X_test, y_test)],
-    eval_group=[test_groups]
+    eval_group=[test_groups],
+    callbacks=[
+        lgb.early_stopping(
+            stopping_rounds=30,
+            verbose=True
+        )
+    ]
 )
 
 print("Training completed.")
 
 
-# Predict ranking scores
-test_df["rerank_score"] = model.predict(
-    X_test
-)
+# Predict scores for the test documents
+test_df["rerank_score"] = model.predict(X_test)
 
 
-# Calculate NDCG@5
+# Calculate NDCG@5 for each query
 scores = []
 
 for query, group in test_df.groupby("query"):
@@ -140,15 +170,21 @@ for query, group in test_df.groupby("query"):
     scores.append(score)
 
 
+# Calculate the average NDCG
 if scores:
     average_ndcg = np.mean(scores)
 
     print(
-        f"\nNDCG@5: {average_ndcg:.4f}"
+        f"\nAverage NDCG@5: {average_ndcg:.4f}"
+    )
+
+    print(
+        "Number of queries evaluated:",
+        len(scores)
     )
 
 
-# Feature importance
+# Check which features were important to the model
 importance = pd.DataFrame({
     "feature": FEATURES,
     "importance": model.feature_importances_
@@ -163,35 +199,41 @@ print("\nFeature importance:")
 print(importance)
 
 
+# Save feature importance
 importance.to_csv(
-    "feature_importance.csv",
+    IMPORTANCE_PATH,
     index=False
 )
 
 
-# Save reranked results
+# Sort the results using the predicted ranking score
 test_df = test_df.sort_values(
     ["query", "rerank_score"],
     ascending=[True, False]
 )
 
+
+# Save the reranked results
 test_df.to_csv(
-    "reranked_results.csv",
+    RESULTS_PATH,
     index=False
 )
 
 
-# Save model
+# Save the trained model
 joblib.dump(
     model,
-    "lightgbm_reranker.pkl"
+    MODEL_PATH
 )
 
+
 print("\nModel saved as:")
-print("lightgbm_reranker.pkl")
+print(MODEL_PATH)
 
 print("\nReranked results saved as:")
-print("reranked_results.csv")
+print(RESULTS_PATH)
 
 print("\nFeature importance saved as:")
-print("feature_importance.csv")
+print(IMPORTANCE_PATH)
+
+print("\nLightGBM reranking process completed.")
