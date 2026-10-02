@@ -40,6 +40,7 @@ export function GeoExplorer({ initialFocus }: { initialFocus?: string }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const [municipalitiesStatus, setMunicipalitiesStatus] = useState<"loading" | "ready" | "error">("loading");
 
   const [selectedProvince, setSelectedProvince] = useState<string | null>(null);
   const [selectedDistrict, setSelectedDistrict] = useState<string | null>(null);
@@ -57,31 +58,51 @@ export function GeoExplorer({ initialFocus }: { initialFocus?: string }) {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     setLoadError(false);
+    setMunicipalitiesStatus("loading");
     function getJson(url: string) {
       return fetch(url).then((r) => {
         if (!r.ok) throw new Error(`${url}: ${r.status}`);
         return r.json();
       });
     }
-    Promise.all([
-      getJson("/data/nepal-provinces.geojson"),
-      getJson("/data/nepal-districts.geojson"),
-      getJson("/data/nepal-municipalities.geojson"),
-    ])
-      .then(([p, d, m]: [ProvinceCollection, DistrictCollection, MunicipalityCollection]) => {
+
+    // The map only needs provinces + districts to appear. Municipalities are the
+    // largest file and only matter once someone picks a district or searches for
+    // a town, so they load afterwards instead of holding up the first view.
+    Promise.all([getJson("/data/nepal-provinces.geojson"), getJson("/data/nepal-districts.geojson")])
+      .then(([p, d]: [ProvinceCollection, DistrictCollection]) => {
+        if (cancelled) return;
         setProvinces(p);
         setDistricts(d);
-        // The source dataset has a handful of malformed entries (null name/id) — drop them.
-        setMunicipalities({
-          ...m,
-          features: m.features.filter((f) => f.properties.NAME && f.properties.N_ID),
-        });
+        setLoading(false);
+
+        getJson("/data/nepal-municipalities.geojson")
+          .then((m: MunicipalityCollection) => {
+            if (cancelled) return;
+            // The source dataset has a handful of malformed entries (null name/id) — drop them.
+            setMunicipalities({
+              ...m,
+              features: m.features.filter((f) => f.properties.NAME && f.properties.N_ID),
+            });
+            setMunicipalitiesStatus("ready");
+          })
+          .catch(() => {
+            if (!cancelled) setMunicipalitiesStatus("error");
+          });
       })
-      .catch(() => setLoadError(true))
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (cancelled) return;
+        setLoadError(true);
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [loadAttempt]);
 
   // Esc backs out of pin mode (or just the unsaved pin) — the standard "cancel" key.
@@ -238,6 +259,8 @@ export function GeoExplorer({ initialFocus }: { initialFocus?: string }) {
         tags={tags}
         onRemoveTag={handleRemoveTag}
         loading={loading}
+        municipalitiesStatus={municipalitiesStatus}
+        onRetryMunicipalities={() => setLoadAttempt((n) => n + 1)}
       />
     </div>
   );
