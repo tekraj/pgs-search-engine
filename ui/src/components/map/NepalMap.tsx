@@ -28,6 +28,15 @@ const TAG_ICON = L.divIcon({
   iconAnchor: [8, 8],
 });
 
+// Short map labels for districts too small to fit their full name. Only the
+// label on the map is shortened; the hover card and sidebar show the full name.
+const MAP_LABEL_ABBREVIATIONS: Record<string, string> = {
+  KATHMANDU: "Ktm",
+  LALITPUR: "Lal",
+  BHAKTAPUR: "Bkt",
+  KAVREPALANCHOK: "Kavre",
+};
+
 // The spot the user just clicked in pin mode, before they've named it.
 const PENDING_ICON = L.divIcon({
   className: "",
@@ -152,7 +161,7 @@ function ZoomControls({ map }: { map: L.Map }) {
     "flex h-8 w-8 items-center justify-center text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent";
 
   return (
-    <div className="absolute right-3 top-3 z-[1000] flex flex-col divide-y divide-slate-200 overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
+    <div data-map-overlay className="absolute right-3 top-3 z-[1000] flex flex-col divide-y divide-slate-200 overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
       <button type="button" aria-label="Zoom in" title="Zoom in" disabled={atMax} onClick={() => map.zoomIn(1)} className={buttonClass}>
         <Plus className="h-4 w-4" />
       </button>
@@ -267,24 +276,95 @@ export function NepalMap({
   const [hoveredDistrict, setHoveredDistrict] = useState<string | null>(null);
   const districtLayersRef = useRef(new Map<string, L.Polygon>());
 
-  // At the full-country view small districts (Kathmandu valley, the Madhesh
-  // strip) are only a few pixels wide and their names pile into each other.
-  // Hide any label that doesn't fit its own district; zooming in reveals it,
-  // and the hover card still names every district.
+  // Place labels the way printed maps do: a name may spill past its district's
+  // border into open space. If its centered spot overlaps a name already placed,
+  // try a few spots just around it (above, below, right, left); only if all are
+  // taken is it hidden. Placement order decides who gets first pick: the
+  // selected district, then districts in the selected province, then bigger
+  // districts. Hidden names reappear on zoom; the hover card names every district.
   const updateLabelVisibility = useCallback(() => {
     if (!map) return;
-    districtLayersRef.current.forEach((layer, name) => {
-      const el = layer.getTooltip()?.getElement();
-      if (!el || !map.hasLayer(layer)) return;
-      const bounds = layer.getBounds();
-      const nw = map.latLngToContainerPoint(bounds.getNorthWest());
-      const se = map.latLngToContainerPoint(bounds.getSouthEast());
-      const labelWidth = titleCase(name).length * 6;
-      const fits = se.x - nw.x >= labelWidth && se.y - nw.y >= 16;
-      const isSelected = name.toLowerCase() === selectedDistrict?.toLowerCase();
-      el.classList.toggle("district-label--hidden", !fits && !isSelected);
+    // Wait a frame so Leaflet has repositioned the tooltips for the new zoom.
+    requestAnimationFrame(() => {
+      const items: { el: HTMLElement; priority: number; area: number }[] = [];
+      districtLayersRef.current.forEach((layer, name) => {
+        const el = layer.getTooltip()?.getElement();
+        if (!el || !map.hasLayer(layer)) return;
+        const bounds = layer.getBounds();
+        const nw = map.latLngToContainerPoint(bounds.getNorthWest());
+        const se = map.latLngToContainerPoint(bounds.getSouthEast());
+        const isSelected = name.toLowerCase() === selectedDistrict?.toLowerCase();
+        const inSelectedProvince = Boolean(selectedProvince) && getDistrictProvince(name) === selectedProvince;
+        items.push({
+          el,
+          priority: isSelected ? 2 : inSelectedProvince ? 1 : 0,
+          area: (se.x - nw.x) * (se.y - nw.y),
+        });
+      });
+      // Scale-dependent order, as in printed atlases. At the full-country view
+      // bigger districts pick first, so the overview names the major ones.
+      // Once zoomed in there's room to spare, so smaller districts pick first:
+      // a big district can nudge its name aside, a tiny one (Bhaktapur,
+      // Lalitpur) has nowhere else to go.
+      const zoomedIn = map.getZoom() > map.getMinZoom() + 0.5;
+      items.sort((a, b) => b.priority - a.priority || (zoomedIn ? a.area - b.area : b.area - a.area));
+
+      // Clear last time's nudges, then measure every label once at its centered
+      // spot (rects are measurable even while visibility:hidden). Candidate
+      // spots are then tested arithmetically — no re-layout per try.
+      for (const item of items) item.el.style.margin = "0";
+      const rects = items.map((item) => item.el.getBoundingClientRect());
+
+      const GAP = 2;
+      // A name half cut off by the map's edge is worse than a missing one, so
+      // every spot must fit fully inside the map.
+      const frame = map.getContainer().getBoundingClientRect();
+      // The zoom buttons and credit line sit on top of the map; treat them as
+      // already-taken space so no name ends up hidden underneath.
+      const placed: { left: number; right: number; top: number; bottom: number }[] = Array.from(
+        map.getContainer().parentElement?.querySelectorAll<HTMLElement>("[data-map-overlay]") ?? [],
+        (el) => el.getBoundingClientRect()
+      );
+      items.forEach((item, i) => {
+        const r = rects[i];
+        const up = -(r.height + GAP);
+        const down = r.height + GAP;
+        const right = r.width / 2 + GAP;
+        const left = -(r.width / 2 + GAP);
+        const candidates: [number, number][] = [
+          [0, 0],
+          [0, up],
+          [0, down],
+          [right, 0],
+          [left, 0],
+          [right, up],
+          [right, down],
+          [left, up],
+          [left, down],
+        ];
+        let chosen: [number, number] | null = null;
+        for (const [dx, dy] of candidates) {
+          const box = { left: r.left + dx, right: r.right + dx, top: r.top + dy, bottom: r.bottom + dy };
+          const insideFrame =
+            box.left >= frame.left + GAP &&
+            box.right <= frame.right - GAP &&
+            box.top >= frame.top + GAP &&
+            box.bottom <= frame.bottom - GAP;
+          if (!insideFrame) continue;
+          const collides = placed.some(
+            (p) => box.left < p.right + GAP && box.right > p.left - GAP && box.top < p.bottom + GAP && box.bottom > p.top - GAP
+          );
+          if (!collides || item.priority === 2) {
+            chosen = [dx, dy];
+            placed.push(box);
+            break;
+          }
+        }
+        item.el.classList.toggle("district-label--placed", Boolean(chosen));
+        if (chosen) item.el.style.margin = `${chosen[1]}px 0 0 ${chosen[0]}px`;
+      });
     });
-  }, [map, selectedDistrict]);
+  }, [map, selectedDistrict, selectedProvince]);
 
   useEffect(() => {
     if (!map) return;
@@ -335,7 +415,7 @@ export function NepalMap({
   function onEachDistrict(feature: Feature, layer: Layer) {
     const props = (feature as DistrictFeature).properties;
     districtLayersRef.current.set(props.DISTRICT, layer as L.Polygon);
-    layer.bindTooltip(titleCase(props.DISTRICT), {
+    layer.bindTooltip(MAP_LABEL_ABBREVIATIONS[props.DISTRICT] ?? titleCase(props.DISTRICT), {
       permanent: true,
       direction: "center",
       className: "district-label",
@@ -511,6 +591,16 @@ export function NepalMap({
       </MapContainer>
       {map && <ZoomControls map={map} />}
       {hoveredDistrict && <HoverCard district={hoveredDistrict} taggingMode={taggingMode} />}
+      {/* Required by the boundary data's CC BY 4.0 license. */}
+      <a
+        href="https://localboundries.oknp.org/"
+        data-map-overlay
+        target="_blank"
+        rel="noopener noreferrer"
+        className="absolute bottom-1 right-2 z-[1000] rounded bg-white/80 px-1.5 py-0.5 text-[10px] text-slate-500 hover:text-slate-800 hover:underline"
+      >
+        Boundaries: Open Knowledge Nepal, CC BY 4.0
+      </a>
       </div>
 
       <style jsx global>{`
@@ -536,10 +626,13 @@ export function NepalMap({
             0 0 3px #fff;
           pointer-events: none;
           white-space: nowrap;
+          /* Hidden until placement finds it a free spot, so freshly drawn
+             labels never flash on top of each other. */
+          visibility: hidden;
         }
 
-        .district-label--hidden {
-          visibility: hidden;
+        .district-label--placed {
+          visibility: visible;
         }
       `}</style>
     </div>

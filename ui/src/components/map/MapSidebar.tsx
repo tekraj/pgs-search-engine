@@ -5,6 +5,7 @@ import { ChevronRight, House, MapPin, Search, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { GeoTag } from "@/lib/types";
 import {
+  DISTRICT_ALIASES,
   PROVINCE_NAMES,
   getDistrictProvince,
   getLevelLabel,
@@ -19,6 +20,8 @@ interface SearchHit {
   name: string;
   district?: string;
   level?: string;
+  // The short name or older spelling that matched, when the official name didn't.
+  alias?: string;
 }
 
 const FOCUS_RING = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500";
@@ -43,6 +46,8 @@ export function MapSidebar({
   tags,
   onRemoveTag,
   loading,
+  municipalitiesStatus,
+  onRetryMunicipalities,
 }: {
   districts: DistrictCollection | null;
   municipalities: MunicipalityCollection | null;
@@ -59,6 +64,8 @@ export function MapSidebar({
   tags: GeoTag[];
   onRemoveTag: (id: string) => void;
   loading: boolean;
+  municipalitiesStatus: "loading" | "ready" | "error";
+  onRetryMunicipalities: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [labelDraft, setLabelDraft] = useState("");
@@ -73,9 +80,12 @@ export function MapSidebar({
       .map((name) => ({ type: "province", name }));
 
     const districtHits: SearchHit[] = districts
-      ? districts.features
-          .filter((f) => f.properties.DISTRICT.toLowerCase().includes(q))
-          .map((f) => ({ type: "district", name: f.properties.DISTRICT }))
+      ? districts.features.flatMap((f): SearchHit[] => {
+          const name = f.properties.DISTRICT;
+          if (name.toLowerCase().includes(q)) return [{ type: "district", name }];
+          const alias = DISTRICT_ALIASES[name]?.find((a) => a.toLowerCase().includes(q));
+          return alias ? [{ type: "district", name, alias }] : [];
+        })
       : [];
 
     const seenMuni = new Set<string>();
@@ -189,6 +199,9 @@ export function MapSidebar({
                 >
                   <span className="truncate text-slate-900 dark:text-slate-100">
                     {hit.type === "district" ? titleCase(hit.name) : hit.name}
+                    {hit.alias && (
+                      <span className="ml-1 text-slate-500 dark:text-slate-400">({hit.alias})</span>
+                    )}
                   </span>
                   <span className="shrink-0 text-xs text-slate-500 dark:text-slate-400">
                     {hit.type === "province"
@@ -205,8 +218,14 @@ export function MapSidebar({
 
         {hasQuery && hits.length === 0 && !loading && (
           <p className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-            No places match &ldquo;{query.trim()}&rdquo;. Check the spelling, or try a district name.
+            {municipalitiesStatus === "loading"
+              ? `No provinces or districts match “${query.trim()}”. Towns and municipalities are still loading — results will appear in a moment.`
+              : `No places match “${query.trim()}”. Check the spelling, or try a district name.`}
           </p>
+        )}
+
+        {hasQuery && hits.length > 0 && municipalitiesStatus === "loading" && (
+          <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">Still loading towns and municipalities…</p>
         )}
       </div>
 
@@ -391,11 +410,32 @@ export function MapSidebar({
             <section>
               <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                 Local governments in {titleCase(selectedDistrict)}
-                <span className="ml-1 font-normal text-slate-500">({districtMunicipalities.length})</span>
+                {municipalitiesStatus === "ready" && (
+                  <span className="ml-1 font-normal text-slate-500">({districtMunicipalities.length})</span>
+                )}
               </h2>
               <p className="mb-2 mt-0.5 text-xs text-slate-500 dark:text-slate-400">
                 Cities, municipalities and rural municipalities. Pick one to zoom to it.
               </p>
+              {municipalitiesStatus === "loading" && (
+                <div className="space-y-2" aria-label="Loading local governments">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <div key={i} className="h-8 animate-pulse rounded-md bg-slate-100 dark:bg-slate-800" />
+                  ))}
+                </div>
+              )}
+              {municipalitiesStatus === "error" && (
+                <div className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-800 dark:bg-rose-500/10 dark:text-rose-200">
+                  Couldn&rsquo;t load the local governments.{" "}
+                  <button
+                    type="button"
+                    onClick={onRetryMunicipalities}
+                    className={cn("font-medium underline", FOCUS_RING)}
+                  >
+                    Try again
+                  </button>
+                </div>
+              )}
               <ul className="space-y-0.5">
                 {districtMunicipalities.map((m) => (
                   <li key={m.N_ID}>
