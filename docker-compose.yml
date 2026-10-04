@@ -1,0 +1,456 @@
+# syntax=docker/compose.yml:1
+#
+# PGS Search Engine - master orchestrator.
+#
+#   Build + start everything:  docker compose up --build -d
+#   Include the scraper worker (needs go.mod fix first):
+#       docker compose --profile crawler up --build -d
+#   Tail logs:                 docker compose logs -f
+#   Stop (keep data):          docker compose down
+#   Stop (wipe data):          docker compose down -v
+#
+# Build contexts follow each service's Dockerfile:
+#   api / search-engine / ETL  -> repo root (they need database/ too)
+#   ui / scraper / database    -> their own directories
+
+name: pgs-search-engine
+
+# ---------------------------------------------------------------------------
+# One shared bridge network: every service resolves the others by service name.
+# ---------------------------------------------------------------------------
+networks:
+  pgs-network:
+    driver: bridge
+
+# ---------------------------------------------------------------------------
+# Persistent data
+# ---------------------------------------------------------------------------
+volumes:
+  pgs-postgres-data:     # PostgreSQL (schema owned by Alembic migrations)
+  pgs-opensearch-data:   # OpenSearch indices
+  pgs-hf-cache:          # Hugging Face models downloaded by search-engine
+  etl-data:              # ETL consumer SQLite receipt store
+  airflow-postgres-data: # Airflow metadata DB
+  temporal-postgres-data: # Temporal workflow DB (scraper worker)
+
+
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: ETL/Dockerfile
+  image: pgs-etl
+  environment:
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@airflow-postgres:5432/airflow
+    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-dummy_dev_secret_change_me}
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    airflow-postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks: [pgs-network]
+
+
+services:
+  # -------------------------------------------------------------------------
+  # Database: PostgreSQL 16 + pgvector + PostGIS (custom image in database/)
+  # -------------------------------------------------------------------------
+  postgres:
+    build: ./database
+    image: pgs-postgres:16-postgis-pgvector
+    container_name: pgs-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pgs}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pgs}
+      POSTGRES_DB: ${POSTGRES_DB:-pgs}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgs-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pgs} -d ${POSTGRES_DB:-pgs}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [pgs-network]
+    restart: unless-stopped
+
+  db-migrate:
+    build:
+      context: ./database
+      dockerfile: migrate.Dockerfile
+    image: pgs-db-migrate
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-pgs}:${POSTGRES_PASSWORD:-pgs}@postgres:5432/${POSTGRES_DB:-pgs}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [pgs-network]
+    restart: "no"
+
+  # One-shot: set per-role passwords from .env (docker/postgres/set-role-passwords.sql)
+  db-role-passwords:
+    image: postgres:16
+    environment:
+      PGS_API_DB_PASSWORD: ${PGS_API_DB_PASSWORD}
+      PGS_ETL_DB_PASSWORD: ${PGS_ETL_DB_PASSWORD}
+      PGS_SEARCH_DB_PASSWORD: ${PGS_SEARCH_DB_PASSWORD}
+      PGS_SCRAPER_DB_PASSWORD: ${PGS_SCRAPER_DB_PASSWORD}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-pgs}
+    command: >
+      psql -h postgres -p 5432 -U ${POSTGRES_USER:-pgs} -d ${POSTGRES_DB:-pgs}
+      -v ON_ERROR_STOP=1 -f /docker-scripts/set-role-passwords.sql
+    volumes:
+      - ./docker/postgres:/docker-scripts:ro
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    networks: [pgs-network]
+    restart: "no"
+
+  # One-shot: seed reference data (geography + boundaries) from database/data
+  db-seed:
+    image: pgs-db-migrate
+    command: >
+      sh -c "python scripts/seed_geography.py && python scripts/seed_boundaries.py"
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-pgs}:${POSTGRES_PASSWORD:-pgs}@postgres:5432/${POSTGRES_DB:-pgs}
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    networks: [pgs-network]
+    restart: "no"
+
+  # -------------------------------------------------------------------------
+  # Kafka (KRaft mode - no ZooKeeper needed).
+  #
+  # Listener layout:
+  #   - host tools/scripts use localhost:9092  (the advertised PLAINTEXT listener)
+  #   - containers on pgs-network use kafka:29092 (advertised PLAINTEXT_INTERNAL)
+  # advertised.listeners must match what clients actually dial, otherwise
+  # Python (kafka-python) and Go (kafka-go) consumers get a dead address.
+  # -------------------------------------------------------------------------
+  kafka:
+    image: apache/kafka:3.8.0
+    container_name: pgs-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,PLAINTEXT_INTERNAL://:29092,CONTROLLER://:9093
+      # NOTE: do NOT add the CONTROLLER listener to advertised.listeners —
+      # Kafka rejects it when the broker role is present (clients must never be
+      # advertised a controller listener).
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # Broker and controller run in the SAME container: localhost is the most
+      # reliable address for the broker->controller heartbeat (DNS alias for
+      # the service name is flaky at startup in some Docker Desktop setups).
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+    networks: [pgs-network]
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # OpenSearch (search index) - from search-engine/docker-compose.yml
+  # -------------------------------------------------------------------------
+  opensearch:
+    image: opensearchproject/opensearch:3.8.0
+    container_name: pgs-opensearch
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    volumes:
+      - pgs-opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [pgs-network]
+    restart: unless-stopped
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:3.8.0
+    container_name: pgs-opensearch-dashboards
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    ports:
+      - "5601:5601"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    networks: [pgs-network]
+
+  # -------------------------------------------------------------------------
+  # Temporal (scraper worker orchestration)
+  # -------------------------------------------------------------------------
+  temporal-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_DB: temporal
+    volumes:
+      - temporal-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [pgs-network]
+
+  temporal:
+    image: temporalio/auto-setup:1.25.2
+    container_name: pgs-temporal
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: temporal-postgres
+    ports:
+      - "7233:7233"
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "tctl cluster health | grep -q SERVING || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+    networks: [pgs-network]
+
+  # -------------------------------------------------------------------------
+  # Search engine core: internal gRPC SearchService on :50051
+  # -------------------------------------------------------------------------
+  search-engine:
+    build:
+      context: .
+      dockerfile: search-engine/Dockerfile
+    image: pgs-search-engine
+    environment:
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: "9200"
+      OPENSEARCH_INDEX: ${OPENSEARCH_INDEX:-np_web_pages}
+      DATABASE_URL: postgresql+psycopg://pgs_search:${PGS_SEARCH_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-pgs}
+    ports:
+      - "50051:50051"
+    volumes:
+      - pgs-hf-cache:/home/app/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+      opensearch:
+        condition: service_healthy
+    networks: [pgs-network]
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # API gateway: FastAPI on :8000, talks to search-engine over gRPC
+  # -------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: pgs-api
+    environment:
+      SEARCH_GRPC_HOST: search-engine
+      SEARCH_GRPC_PORT: "50051"
+      DATABASE_URL: postgresql+psycopg://pgs_api:${PGS_API_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-pgs}
+    ports:
+      - "8000:8000"
+    depends_on:
+      search-engine:
+        condition: service_started
+      db-role-passwords:
+        condition: service_completed_successfully
+    networks: [pgs-network]
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # UI: Next.js standalone server on :3000
+  # -------------------------------------------------------------------------
+  ui:
+    build:
+      context: ./ui
+      args:
+        # Baked into the client bundle at build time; must be the host-visible API URL.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    image: pgs-ui
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_started
+    networks: [pgs-network]
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # Go scraper worker: Temporal worker, writes to NDJSON (default), Postgres,
+  # or Kafka (--storage). Flags via env vars, see scraper/cmd/worker/main.go.
+  # NOTE: scraper/go.mod currently lacks the temporal/prometheus/automaxprocs
+  # requires and the internal/activities, internal/workflows, internal/envflag
+  # packages - run `cd scraper && go mod tidy && go get ./...` first if the
+  # build complains.
+  # -------------------------------------------------------------------------
+  scraper:
+    profiles: ["crawler"] # opt-in until scraper/go.mod is tidied (see note below)
+    build: ./scraper
+    image: pgs-scraper
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      NAMESPACE: default
+      STORAGE: ${SCRAPER_STORAGE:-kafka}
+      KAFKA_BROKERS: kafka:29092
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-crawled-documents}
+      DATABASE_URL: postgres://pgs_scraper:${PGS_SCRAPER_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-pgs}
+      MAX_CONCURRENT_ACTIVITIES: ${SCRAPER_MAX_CONCURRENT:-32}
+    ports:
+      - "9090:9090" # Prometheus metrics
+    depends_on:
+      kafka:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    networks: [pgs-network]
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # ETL Kafka consumer: validates documents off Kafka into a SQLite receipt store.
+  # Uses the root ETL/Dockerfile image (Airflow + PySpark + kafka-python).
+  # -------------------------------------------------------------------------
+  etl-consumer:
+    build:
+      context: .
+      dockerfile: ETL/Dockerfile
+    image: pgs-etl
+    command: ["python", "/opt/etl/kafka/consumer.py", "consume"]
+    environment:
+      KAFKA_BROKERS: kafka:29092
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-crawled-documents}
+      KAFKA_GROUP: search-engine-etl-v1
+      ETL_DATABASE: /data/etl.sqlite3
+    volumes:
+      - etl-data:/data
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks: [pgs-network]
+    restart: unless-stopped
+
+  # One-shot Spark smoke test (same transform.py as the Airflow DAG uses)
+  etl-spark-test:
+    image: pgs-etl
+    command: ["python", "/opt/airflow/spark_lib/test_spark.py"]
+    depends_on:
+      kafka:
+        condition: service_started
+    networks: [pgs-network]
+    restart: "no"
+
+  # -------------------------------------------------------------------------
+  # Airflow (orchestration of scheduled batch jobs) - CeleryExecutor
+  # -------------------------------------------------------------------------
+  airflow-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 10
+    networks: [pgs-network]
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+    networks: [pgs-network]
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate &&
+        airflow users create \
+          --username airflow --password airflow \
+          --firstname Air --lastname Flow \
+          --role Admin --email admin@example.com || true
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  airflow-worker:
+    <<: *airflow-common
+    command: celery worker
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+

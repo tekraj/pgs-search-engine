@@ -1,0 +1,18 @@
+# Build context: scraper/
+.git
+.env
+*.log
+/search-engine
+*.exe
+data/output
+
+# Non-Go runtime artifacts
+python
+**/__pycache__
+**/*.py[cod]
+.venv
+*.md
+Makefile
+Dockerfile
+.dockerignore
+.gitignore

@@ -1,0 +1,35 @@
+# Build context: repository root, used by api/Dockerfile, ETL/Dockerfile, and search-engine/Dockerfile
+# Allow-list approach: exclude everything by default, then re-include needed services
+*
+!api/
+!database/
+!ETL/
+!search-engine/
+
+# Ignore local environments, caches, and secrets
+**/.venv
+**/venv
+**/.env
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/.ruff_cache
+**/*.log
+**/Dockerfile
+**/*.Dockerfile
+**/.dockerignore
+
+# Exclude unnecessary test and doc directories
+database/build
+database/dist
+database/tests
+database/docs
+database/*.png
+
+# Exclude ETL runtime logs and sqlite state
+ETL/airflow/logs/*
+ETL/kafka/*.sqlite3*
+
+# Exclude search-engine tests
+search-engine/tests

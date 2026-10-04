@@ -1,0 +1,9 @@
+# api/.dockerignore
+.venv
+venv
+.env
+**/__pycache__
+**/*.py[cod]
+*.log
+Dockerfile
+.dockerignore

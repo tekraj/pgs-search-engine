@@ -1,0 +1,22 @@
+# Build context: database/
+.venv
+venv
+.env
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+build
+dist
+.pytest_cache
+.ruff_cache
+*.log
+
+# Tests, docs, diagrams
+tests
+docs
+*.png
+Dockerfile
+*.Dockerfile
+.dockerignore
+.gitignore
+.env.example

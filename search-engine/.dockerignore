@@ -1,0 +1,11 @@
+# search-engine/.dockerignore
+.venv
+venv
+.env
+**/__pycache__
+**/*.py[cod]
+*.log
+tests
+training_data
+Dockerfile
+.dockerignore
