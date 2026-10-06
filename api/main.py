@@ -7,6 +7,7 @@ app = FastAPI(title="User Search API")
 # Include the user search router
 app.include_router(user_search_router)
 
+<<<<<<< HEAD
 # Optional: Add startup/shutdown events for the gRPC client
 from user_search.grpc_client import get_grpc_client, _grpc_client
 
@@ -18,3 +19,11 @@ async def startup_event():
 async def shutdown_event():
     if _grpc_client:
         _grpc_client.close()
+=======
+@app.get("/")
+def hello_world():
+    return {"message": "Hello, World!"}
+
+
+
+>>>>>>> origin/master

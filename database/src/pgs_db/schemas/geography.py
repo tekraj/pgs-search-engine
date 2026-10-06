@@ -2,8 +2,7 @@
 
 from pydantic import Field
 
-from pgs_db.enums import LocalBodyType
-
+from ..enums import LocalBodyType
 from .base import ReadSchema, SchemaBase
 
 
@@ -91,13 +90,14 @@ class DistrictUpdate(SchemaBase):
 class DistrictRead(DistrictBase, ReadSchema):
     """District data returned by the application."""
 
-    class LocalBodyBase(SchemaBase):
+
+
+class LocalBodyBase(SchemaBase):
     """Fields shared by all local-body schemas."""
 
     code: str = Field(
-        min_length=1,
-        max_length=16,
-        description="Unique code assigned to the local body",
+        pattern=r"^MUN\d{3}$",
+        description="Local body code from MUN001 through MUN753",
     )
     district_code: str = Field(
         pattern=r"^D(?:0[1-9]|[1-6][0-9]|7[0-7])$",
@@ -110,6 +110,7 @@ class DistrictRead(DistrictBase, ReadSchema):
     phone: str | None = Field(default=None, max_length=50)
     email: str | None = Field(default=None, max_length=255)
     address: str | None = Field(default=None, max_length=255)
+    ward_count: int | None = Field(default=None, gt=0)
 
 
 class LocalBodyCreate(LocalBodyBase):
@@ -130,6 +131,7 @@ class LocalBodyUpdate(SchemaBase):
     phone: str | None = Field(default=None, max_length=50)
     email: str | None = Field(default=None, max_length=255)
     address: str | None = Field(default=None, max_length=255)
+    ward_count: int | None = Field(default=None, gt=0)
 
 
 class LocalBodyRead(LocalBodyBase, ReadSchema):

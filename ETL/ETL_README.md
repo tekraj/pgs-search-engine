@@ -1,162 +1,118 @@
 # ETL
 
-Consumes crawled content from Kafka, transforms it with Spark (dedup,
-geo-tagging, embedding), and hands the result off for storage. Also
-runs scheduled batch maintenance via Airflow.
+ETL for a Nepali/English search engine. Airflow schedules, Temporal executes,
+Spark computes:
+
+- every 30 minutes Airflow starts a crawl of every website in the `domains`
+  table on Temporal (the Go scraper worker runs it);
+- each website whose crawl finishes sends one Kafka event;
+- once 100 events have accumulated, Airflow hands the batch to Temporal, whose
+  ETL worker is the Spark driver: per site, on the Spark cluster, security
+  scan (rule checks + ClamAV), text extraction, dedup, geo-tagging, LaBSE
+  embedding, and output as JSONL, which is indexed into OpenSearch.
+
+The output still goes to JSONL instead of PostgreSQL; the target design is
+described in `spark/README.md`.
 
 ## Layout
 
 | Path | What it is |
 | --- | --- |
-| `airflow/` | Orchestration. Docker Compose stack + DAGs. |
-| `kafka/` | Consumer that reads crawled documents off Kafka and validates them. |
-| `spark/` | Shared Spark transformation logic (Docker image + jobs). |
+| `airflow/` | DAGs (`dags/`) and the JSONL output (`data/processed/`). |
+| `temporal/` | The ETL Temporal worker (`worker.py`): `EtlBatchWorkflow` (`etl_workflows.py`) and its `run_site_pipeline` activity (`etl_activities.py`); the Spark driver. |
+| `spark/` | The per-site PySpark pipeline (`site_pipeline.py`), transform/dedup/embedding (`transform.py`) and intake security checks (`security_scanner.py`, rule-based + ClamAV). |
+| `kafka/` | `requirements.txt` (kafka-python, for the DAG). `consumer.py`, `test_consumer.py` and `tools/` belong to the former per-document hand-off and are no longer used. |
+| `open_search/` | Indexer that bulk-loads the JSONL output into the `pgs_documents` index. |
+| `Dockerfile` | The one image every ETL container runs (see below). |
 
-## Architecture (target)
+## Workflow
 
+![Crawl and ETL pipeline: Airflow, Temporal, Go scraper, Kafka, Spark](etl_pipeline.svg)
+
+The same flow as text:
+
+```text
+Airflow DAG scraper_crawl_schedule (every 30 min, SCRAPER_CRAWL_SCHEDULE)
+  -> reads domains (not PAUSED) -> Temporal CrawlDomainsWorkflow "scheduled-crawl-domains"
+     (fixed ID: a tick while the last crawl still runs is skipped)
+  -> Go scraper-worker: one child crawl per website, pages to S3
+  -> per finished website: Kafka scraped_files_topic, one site_crawl_completed event
+       {crawl_run_id, target_domain, status, bucket, key_prefix,
+        documents_prefix: "<key_prefix>/<crawl_run_id>/<host>/", ...}
+
+Airflow DAG etl_ingestion_pipeline (every 2 min, one run at a time)
+  poll_batch       waits for ETL_BATCH_SIZE (100) events; flushes a smaller batch
+                   once its oldest event waited ETL_BATCH_MAX_WAIT_MINUTES (60)
+  process_batch    starts Temporal EtlBatchWorkflow "etl-batch-p<partition>-<from>-<to>"
+                   on etl-task-queue and waits for it
+                     etl-worker (Spark driver): run_site_pipeline per site,
+                     ETL_SITE_CONCURRENCY (4) at a time, retried per site
+                       Spark executors (spark-worker x2): per page, read the HTML
+                       from S3, rule checks + ClamAV, extract text
+                       driver: dedup, LaBSE embedding, append JSONL
+  commit_offsets   only after the whole batch succeeded
+  -> airflow/data/processed/transformed_documents.jsonl
+  -> opensearch-indexer -> OpenSearch index pgs_documents
 ```
-Kafka (scraped_files_topic) -> Spark (parse, dedup, geo-tag, embed) -> Postgres + OpenSearch
-```
 
-Airflow runs *alongside* this, on a schedule, for batch maintenance
-(nightly dedup, index cleanup) — it is not meant to sit in the live
-per-document path in the final design. See `spark/README.md` for the
-full architecture spec. **Phase 1 (below) currently routes documents
-through Airflow to prove the pieces work together — that's a testing
-stand-in, not the final wiring.**
+A page that fails the intake checks is left out (and logged). If ClamAV, S3 or
+Spark is unavailable, the site's activity is retried by Temporal; if it still
+fails, the batch fails and nothing is committed, so the next DAG run starts the
+same batch again. Sites of that batch that already reached the output are
+skipped then (`run_site_pipeline` checks the output for that run and site).
 
-## Local setup
+Other DAGs: `airflow_healthcheck` (scheduler smoke test) and
+`document_extraction_check` (parses `data/sample.html` / `data/sample.txt`).
 
-You need Kafka and Airflow running; both share one Docker network so
-Airflow can reach Kafka by container name.
+## Run it
+
+Everything runs from the repository-root `docker-compose.yml`, from the
+repository root:
 
 ```bash
-# 1. One-time: create the shared network
-docker network create pgs-etl-dag
-
-# 2. Start Kafka
-cd ETL/kafka
-docker compose up -d
-
-# 3. Start Airflow (builds a custom image with PySpark + kafka-python
-#    baked in, and mounts ETL/spark/ so DAGs can import transform.py)
-cd ../airflow
-docker compose build
-docker compose up -d
+cp .env.example .env                                  # once; set AIRFLOW_UID to `id -u`
+docker compose --profile scraper up -d --build        # Airflow, Temporal, Spark, Kafka, ClamAV, crawler, ...
+docker compose exec airflow-scheduler airflow dags trigger scraper_crawl_schedule   # crawl now
+# Airflow UI http://localhost:8080 (login from .env); Temporal UI http://localhost:8233;
+# Spark master UI http://localhost:8090
+docker compose run --rm opensearch-indexer            # index the JSONL output
 ```
 
-Airflow UI: http://localhost:8080 (login: `airflow` / `airflow`).
-Give the webserver ~30-40s after `up -d` to pass its healthcheck.
-
-## What's here so far (Phase 1 — proving the tools work together)
-
-Real scraper data and a real MinIO instance aren't available yet, so
-this phase uses stand-ins:
-- `airflow/data/local_dfs_store/` stands in for MinIO.
-- Small hand-built JSON messages stand in for what the scraper will
-  eventually publish (its real output format isn't finalized yet).
-
-### Kafka consumer (`kafka/`)
-
-`kafka/consumer.py` validates and loads a scraped `Document` JSON off
-Kafka into a local SQLite store — this is the scraper→ETL handoff,
-tested independently of the chain below. Full test coverage and
-how-to-run instructions: `kafka/phase1_testing/README.md`.
-
-Scripts in `kafka/phase1_testing/`:
-| Script | What it does |
+| Container | What it does |
 | --- | --- |
-| `publish_sample_document.py` | Publishes one valid dummy `Document` |
-| `publish_validation_cases.py` | Publishes 8 cases covering loaded/rejected paths |
-| `test_consumer_idempotency.py` | Proves same-offset replay is a no-op |
-| `publish_dfs_ready_signal.py` | Publishes a "file ready" signal (used by the chain DAG below) |
+| `airflow-webserver`, `airflow-scheduler` | Airflow 2.10 with the LocalExecutor (no Celery, no Redis): the scheduler migrates Airflow's database on start and runs the DAGs' lightweight tasks itself |
+| `temporal`, `temporal-ui` | Workflow engine for the crawl and the ETL batches; its databases are in the shared `postgres` server (created by `db-roles`) |
+| `etl-worker` | Temporal worker for `EtlBatchWorkflow`; the Spark driver (one long-lived Spark application); dedup, embedding and JSONL output. One replica |
+| `spark-master`, `spark-worker` | Spark 3.5 standalone cluster on the ETL image; `SPARK_WORKERS` (2) workers |
+| `clamav` | ClamAV daemon the executors stream every page to (`CLAMD_HOST=clamav`); the first start downloads signatures (a few minutes) |
+| `kafka` | Broker: `kafka:29092` from containers, `localhost:9092` from the host |
+| `opensearch` | OpenSearch 2.19 (`http://localhost:9200`); 2.x because the index mapping uses the `nmslib` k-NN engine, which 3.x refuses for new indexes |
+| `opensearch-indexer` | One-shot tool (`docker compose run --rm opensearch-indexer`) |
 
-### Airflow chain DAG (`airflow/dags/phase1_chain_dag.py`)
+All of them run one image, `ETL/Dockerfile`: Airflow 2.10 + JDK + PySpark 3.5.3,
+plus kafka-python, temporalio, pypdf, sentence-transformers (CPU-only PyTorch)
+and clamd. `airflow/{dags,plugins,config,data}` and `spark/` are
+bind-mounted into the Airflow containers, and `temporal/`, `spark/` and
+`airflow/data` into `etl-worker`, so edits apply without a rebuild: DAGs within
+a minute, the pipeline and the worker after `docker compose restart etl-worker`
+(its long-lived Spark application ships `spark/*.py` to the executors when it
+starts). The LaBSE model (~1.8 GB) downloads on the first embedding into
+`./data/etl-models` (repository root).
 
-Proves Airflow, Kafka, and Spark can pass data to each other end to
-end. Four tasks, run in sequence:
+The shared `pgs-db` package needs SQLAlchemy 2, which Airflow 2.10 cannot load,
+so it lives in a separate interpreter, `/opt/etl-venv/bin/python` (with the Kafka
+and OpenSearch clients). The indexer runs with it; an Airflow task can use it via
+`@task.external_python(python="/opt/etl-venv/bin/python")`. ETL containers get
+`DATABASE_URL` for the `pgs_etl` role.
 
-```
-poll_kafka_signal -> fetch_from_dfs -> run_spark_transform -> log_result
-```
+Tests: `docker compose run --rm --no-deps --entrypoint bash -w /opt/airflow/spark_lib
+etl-worker -c "python -m unittest test_site_pipeline"`.
 
-1. **poll_kafka_signal** — reads one "file ready" message off topic
-   `scraped_files_topic` (8s timeout; skips the run if nothing's there).
-2. **fetch_from_dfs** — reads the referenced file from
-   `local_dfs_store/`, standing in for a MinIO `GetObject` call.
-3. **run_spark_transform** — runs `spark/transform.py`'s
-   `analyze_text()` on the fetched content, inside Airflow's embedded
-   PySpark. This is a **placeholder** (char/word count) — see Known
-   gaps below.
-4. **log_result** — prints the result to the task's Airflow logs.
+## Known gaps
 
-### Running it
-
-```bash
-cd ETL/kafka
-python phase1_testing/publish_dfs_ready_signal.py
-```
-Then in the Airflow UI: unpause `phase1_kafka_dfs_spark_chain`, trigger
-it (▶), and open the `run_spark_transform` task's logs — you'll see an
-actual Spark DataFrame table (`raw_text | char_count | word_count`)
-printed, confirming the signal made it through Kafka, the local DFS
-stand-in, and real PySpark execution, and back out through
-`log_result`.
-
-### Shared Spark logic (`spark/`)
-
-`spark/transform.py` holds `analyze_text()` — the one place Spark
-transformation logic lives. Both `spark/test_spark.py` (standalone,
-run via the `spark/Dockerfile` image) and the Airflow chain DAG
-(`run_spark_transform`, run via Airflow's embedded PySpark) import and
-call this same function, so there's one implementation, not two
-copies that could drift apart.
-
-```bash
-# Run the standalone Spark test directly (no Airflow needed):
-cd ETL/spark
-docker build -t pgs-spark-test .
-docker run --rm pgs-spark-test
-```
-
-## Known gaps (intentional, for later phases)
-
-- **`analyze_text()` is a placeholder** — char/word counts only. Real
-  DOM/PDF parsing, content dedup (SHA256 exact + SimHash fuzzy match),
-  and geo-tagging (province/district/municipality) are separate, later
-  work (Spark Transformation / Spark Malware Test tasks). This is the
-  one function to replace — the Kafka/Airflow wiring around it doesn't
-  need to change.
-- **Two Spark "environments" currently exist** — PySpark embedded
-  directly in the Airflow image (used by the chain DAG) and the
-  separate `spark/Dockerfile` image (used standalone). Both now run the
-  same logic via `transform.py`, but production will likely want real
-  Spark cluster/executor parallelism rather than PySpark embedded in a
-  single Airflow task — worth deciding before scaling past dummy data.
-- **No MinIO instance yet** — `local_dfs_store/` is a stand-in;
-  `fetch_from_dfs` reads a local path, not MinIO's API.
-- **Airflow is in the live per-document path right now** (as tested
-  above), which contradicts the target architecture where Spark
-  consumes Kafka directly and Airflow only runs scheduled batch jobs.
-  This chain DAG is an integration proof, not the intended final wiring.
-- **Kafka signal shape is unconfirmed** — `scraped_files_topic` and its
-  fields (`object_key`, `target_domain`, etc.) come from
-  `spark/README.md`'s spec, not a confirmed contract with the scraper
-  team. The scraper's current code doesn't actually emit this yet.
-- **No Postgres/OpenSearch write path yet** — pending schema sync with
-  the database team.
-- **Malware scanning (ClamAV) not implemented yet.**
-
-## For contributors
-
-- Picking up **Spark Transformation** or **Spark Malware Test**? Start
-  in `spark/transform.py` — replace `analyze_text()` with real logic.
-  Both the standalone test and the Airflow chain pick it up
-  automatically once it's updated.
-- Picking up the **database write path**? See `fetch_from_dfs` and
-  `run_spark_transform` in `airflow/dags/phase1_chain_dag.py` for where
-  a real write step would plug in after transformation.
-- Questions about the Kafka message contract (what the scraper
-  actually sends) should go to whoever owns `scraper/` — the current
-  signal shape here is a guess based on the architecture doc, not a
-  confirmed agreement.
+- **JSONL output:** the pipeline writes JSONL instead of PostgreSQL. The
+  database write path is `pgs_db.etl.save_transformed(...)` as `pgs_etl`
+  (see `database/README.md` §8).
+- **One ETL worker:** the JSONL output and dedup live in the `etl-worker`
+  process, so it runs as one replica (Spark scales the per-page work). Moving
+  the output to PostgreSQL removes that limit.
