@@ -5,7 +5,7 @@ from typing import Optional
 from .schemas import UserSearchRequest, UserSearchResponse, UserSearchResult
 from .grpc_client import get_grpc_client, UserSearchGrpcClient
 
-router = APIRouter(prefix="/user", taggs=["User Search"])
+router = APIRouter(prefix="/user", tags=["User Search"])
 
 @router.get("/search", response_model=UserSearchResponse, summary="Search for users")
 async def search_users(

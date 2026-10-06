@@ -1,0 +1,7 @@
+[33m79b97f6[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mRainy/api-user-search[m[33m)[m Fix user search parameter syntax
+[33me52428f[m Add search query parameter validation
+[33m0b735d9[m Document API environment settings
+[33mc9800f5[m Fix user search route prefix
+[33maaa178b[m Add user search API route
+[33mda91484[m Add search gRPC client
+[33m5765b02[m chore(api): update api gitignore

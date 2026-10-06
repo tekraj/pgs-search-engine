@@ -1,36 +1,20 @@
+# main.py (or wherever your FastAPI app is defined)
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-
-from core.config import settings
-from auth.router import router as auth_router
 from user_search.router import router as user_search_router
-from geo.router import router as geo_router
-from admin_monitoring.router import router as admin_monitoring_router
-from admin_domains.router import router as admin_domains_router
-from admin_storage_logs.router import router as admin_storage_logs_router
 
-app = FastAPI(title="PGS Search Engine API")
+app = FastAPI(title="User Search API")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Include the user search router
+app.include_router(user_search_router)
 
-p = settings.api_v1_prefix
-app.include_router(auth_router, prefix=f"{p}/auth", tags=["Auth"])
-app.include_router(user_search_router, prefix=f"{p}/user", tags=["User Search"])
-app.include_router(geo_router, prefix=f"{p}/user/geo", tags=["Geo"])
-app.include_router(admin_monitoring_router, prefix=f"{p}/admin", tags=["Admin Monitoring"])
-app.include_router(admin_domains_router, prefix=f"{p}/admin/domains", tags=["Domain Management"])
-app.include_router(admin_storage_logs_router, prefix=f"{p}/admin", tags=["Storage & Logs"])
+# Optional: Add startup/shutdown events for the gRPC client
+from user_search.grpc_client import get_grpc_client, _grpc_client
 
+@app.on_event("startup")
+async def startup_event():
+    get_grpc_client()  # Initialize connection
 
-@app.get("/")
-def hello_world():
-    return {"message": "Hello, World!"}
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+@app.on_event("shutdown")
+async def shutdown_event():
+    if _grpc_client:
+        _grpc_client.close()
