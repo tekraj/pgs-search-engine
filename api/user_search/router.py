@@ -27,16 +27,15 @@ def search(
     municipality_id: str = Query("", description="e.g. MUN75340"),
     ward_number: int = Query(0, description="Ward number"),
     content_type: str = Query(
-        "all",
-        description="all, web_page, document",
-    ),
+    "all",
+    description="all, web_page, document",
+    pattern="^(all|web_page|document)$",
+),
     lang: str = Query(
-        "auto",
-        description="auto, ne, en",
-    ),
-    page: int = Query(1, ge=1),
-    limit: int = Query(10, ge=1, le=100),
-):
+    "auto",
+    description="auto, ne, en",
+    pattern="^(auto|ne|en)$",
+)
     """
     Search users through the Search gRPC service.
     """
