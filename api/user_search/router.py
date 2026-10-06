@@ -35,7 +35,11 @@ def search(
     "auto",
     description="auto, ne, en",
     pattern="^(auto|ne|en)$",
-)
+),
+page: int = Query(1, ge=1),
+limit: int = Query(10, ge=1, le=100),
+):
+
     """
     Search users through the Search gRPC service.
     """
