@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .env
 
+pgs-search-engine/
+__pycache__/
+*.pyc
+.pytest_cache/
