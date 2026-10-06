@@ -13,7 +13,6 @@ from user_search.grpc_client import SearchGrpcClient
 
 
 router = APIRouter(
-    prefix="/user",
     tags=["User Search"],
 )
 
