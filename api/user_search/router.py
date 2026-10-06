@@ -1,8 +1,6 @@
-
-from grpc_client import SearchGrpcClient
-from fastapi import APIRouter, HTTPException, Query
-from typing import Optional
 import grpc
+
+from fastapi import APIRouter, HTTPException, Query
 
 from user_search.schemas import (
     UserSearchResponse,
@@ -10,9 +8,14 @@ from user_search.schemas import (
     SearchMetadata,
     RegionalCard,
 )
-from grpc_client import SearchGrpcClient
 
-router = APIRouter()
+from user_search.grpc_client import SearchGrpcClient
+
+
+router = APIRouter(
+    prefix="/user",
+    tags=["User Search"],
+)
 
 grpc_client = SearchGrpcClient()
 
@@ -24,12 +27,21 @@ def search(
     district_code: str = Query("", description="D01 to D77"),
     municipality_id: str = Query("", description="e.g. MUN75340"),
     ward_number: int = Query(0, description="Ward number"),
-    content_type: str = Query("all", description="all, web_page, document"),
-    lang: str = Query("auto", description="auto, ne, en"),
+    content_type: str = Query(
+        "all",
+        description="all, web_page, document",
+    ),
+    lang: str = Query(
+        "auto",
+        description="auto, ne, en",
+    ),
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1, le=100),
+):
+    """
+    Search users through the Search gRPC service.
+    """
 
-    """GET /api/v1/user/search"""
     try:
         response = grpc_client.search(
             query=q,
@@ -42,6 +54,7 @@ def search(
             page=page,
             limit=limit,
         )
+
     except grpc.RpcError as e:
         raise HTTPException(
             status_code=502,
@@ -64,8 +77,10 @@ def search(
     ]
 
     regional_card = None
+
     if response.regional_card and response.regional_card.region_name_en:
         rc = response.regional_card
+
         regional_card = RegionalCard(
             region_name_en=rc.region_name_en,
             region_name_ne=rc.region_name_ne,
