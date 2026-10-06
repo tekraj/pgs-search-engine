@@ -1,113 +1,94 @@
-from fastapi import APIRouter, Query, HTTPException
-from grpc_client import AdminGrpcClient
+from fastapi import APIRouter, Depends, HTTPException
 
-from admin_domains.schemas import (
-    DomainListResponse,
-    DomainInfo,
-    AddDomainsRequest,
-    AddDomainsResponse,
-    DomainActionRequest,
-    DomainActionResponse,
+from core.dependencies import require_roles
+
+from admin_domains.schemas import DomainCreate
+from admin_domains.service import (
+    create_domain,
+    list_domains,
+    update_domain,
+    delete_domain,
 )
+
 
 router = APIRouter()
 
-_MOCK_DOMAINS = [
-    {
-        "domain": "mofaga.gov.np",
-        "category": "Government",
-        "status": "CRAWLING",
-        "discovered_child_links": 4520,
-        "scraped_pages": 4100,
-        "failed_pages": 12,
-        "last_crawled_at": "2026-09-16T22:50:00Z",
-        "rate_limit_per_sec": 5,
-    },
-    {
-        "domain": "failedsite.com.np",
-        "category": "News",
-        "status": "FAILED",
-        "discovered_child_links": 120,
-        "scraped_pages": 0,
-        "failed_pages": 120,
-        "last_crawled_at": "2026-09-15T10:00:00Z",
-        "rate_limit_per_sec": 2,
-    },
-]
+
+admin_required = Depends(
+    require_roles("admin")
+)
 
 
-@router.get("", response_model=DomainListResponse)
-def list_domains(
-    status: Optional[str] = Query(
-        None, description="CRAWLING, FAILED, PENDING, COMPLETED"
-    ),
-    search_domain: Optional[str] = Query(None),
-    page: int = Query(1, ge=1),
-    limit: int = Query(10, ge=1, le=100),
-):
-    """GET /api/v1/admin/domains"""
-    results = _MOCK_DOMAINS
+@router.post(
+    "",
+    dependencies=[admin_required],
+)
+def add_domain(request: DomainCreate):
 
-    if status:
-        results = [d for d in results if d["status"] == status.upper()]
-    if search_domain:
-        results = [d for d in results if search_domain.lower() in d["domain"].lower()]
+    try:
 
-    start = (page - 1) * limit
-    end = start + limit
-    page_results = results[start:end]
-
-    return DomainListResponse(
-        total_count=len(results),
-        domains=[DomainInfo(**d) for d in page_results],
-    )
-
-
-@router.post("/add", response_model=AddDomainsResponse)
-def add_domains(payload: AddDomainsRequest):
-    """POST /api/v1/admin/domains/add"""
-    # TODO: call gRPC ManageDomain / seed-add equivalent here
-    for d in payload.domains:
-        _MOCK_DOMAINS.append(
-            {
-                "domain": d,
-                "category": payload.category,
-                "status": "PENDING",
-                "discovered_child_links": 0,
-                "scraped_pages": 0,
-                "failed_pages": 0,
-                "last_crawled_at": None,
-                "rate_limit_per_sec": 5,
-            }
+        return create_domain(
+            domain=request.domain,
+            enabled=request.enabled,
+            crawl_enabled=request.crawl_enabled,
         )
 
-    return AddDomainsResponse(
-        success=True,
-        added_count=len(payload.domains),
-        message=f"{len(payload.domains)} domain(s) queued with priority {payload.priority}",
-    )
+    except ValueError as exc:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        )
 
 
-@router.post("/{domain_name}/action", response_model=DomainActionResponse)
-def domain_action(domain_name: str, payload: DomainActionRequest):
-    """POST /api/v1/admin/domains/{domain_name}/action"""
-    domain = next((d for d in _MOCK_DOMAINS if d["domain"] == domain_name), None)
-    if not domain:
-        raise HTTPException(status_code=404, detail=f"Domain '{domain_name}' not found")
+@router.get(
+    "",
+    dependencies=[admin_required],
+)
+def get_domains():
 
-    # TODO: replace with real gRPC ManageDomainRequest call
-    action_map = {
-        "PAUSE": "PAUSED",
-        "RESUME": "CRAWLING",
-        "RE_CRAWL": "PENDING",
-        "DELETE": "DELETED",
-    }
-    domain["status"] = action_map[payload.action]
+    return list_domains()
 
-    if payload.action == "DELETE":
-        _MOCK_DOMAINS.remove(domain)
 
-    return DomainActionResponse(
-        success=True,
-        message=f"Action '{payload.action}' applied to {domain_name}",
-    )
+@router.patch(
+    "/{domain}",
+    dependencies=[admin_required],
+)
+def update(
+    domain: str,
+    enabled: bool | None = None,
+    crawl_enabled: bool | None = None,
+):
+
+    try:
+
+        return update_domain(
+            domain,
+            enabled,
+            crawl_enabled,
+        )
+
+    except ValueError as exc:
+
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        )
+
+
+@router.delete(
+    "/{domain}",
+    dependencies=[admin_required],
+)
+def remove(domain: str):
+
+    try:
+
+        return delete_domain(domain)
+
+    except ValueError as exc:
+
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        )
