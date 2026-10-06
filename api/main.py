@@ -31,6 +31,11 @@ app.include_router(admin_storage_logs_router, prefix=f"{p}/admin", tags=["Storag
 def hello_world():
     return {"message": "Hello, World!"}
 
+<<<<<<< HEAD
 @app.get("/health")
 def health():
     return {"status": "ok"}
+=======
+
+
+>>>>>>> dfb0a185ed47e30f0ed0d044977bc988119762b0
