@@ -146,57 +146,69 @@ export default function HomePage() {
 
       <main className="flex-1">
         {/* Hero */}
-        <section className="relative overflow-hidden border-b border-slate-200 bg-gradient-to-b from-blue-50/70 to-white dark:border-slate-800 dark:from-slate-900 dark:to-slate-950">
-          {/* grid-cols-1 = minmax(0, 1fr): without an explicit column the
-              phone layout stretches to its widest content and gets clipped. */}
-          <div className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-10 px-6 py-14 sm:py-20 lg:grid-cols-[1.05fr_1fr] lg:gap-14">
-            <div id="search" className="scroll-mt-24">
-              <p className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-white px-3 py-1 text-xs font-medium text-blue-800 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300">
-                <span className="h-1.5 w-1.5 rounded-full bg-blue-600" aria-hidden />
-                The search engine for Nepal
-              </p>
-              <h1 className="mt-5 text-4xl font-semibold leading-tight tracking-tight text-slate-900 sm:text-5xl dark:text-white">
-                Find what&rsquo;s published in Nepal &mdash; <span className="text-blue-700 dark:text-blue-400">by place</span>.
-              </h1>
-              <p className="mt-4 max-w-xl text-lg text-slate-600 dark:text-slate-300">
-                PGS searches news, government notices, universities and organisations across Nepal, and connects
-                every result to its province, district and municipality.
-              </p>
-              <div className="mt-8">
-                <HomeSearch />
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 dark:border-slate-800 dark:bg-slate-900">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Browse Nepal by province</p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">Choose a province to explore it on the map</p>
-                </div>
-                <Link
-                  href="/map"
-                  className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-blue-700 hover:underline dark:text-blue-400"
-                >
-                  Full map <ArrowRight className="h-4 w-4" aria-hidden />
-                </Link>
-              </div>
-              <div className="rounded-xl bg-slate-50 p-2 dark:bg-slate-100">
-                <ProvinceMap />
-              </div>
-            </div>
+        <section className="relative isolate overflow-hidden border-b border-slate-200 bg-gradient-to-b from-blue-50 via-white to-white dark:border-slate-800 dark:from-slate-900 dark:via-slate-950 dark:to-slate-950">
+          <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
+            <div className="absolute -top-56 left-1/2 h-[34rem] w-[76rem] -translate-x-1/2 rounded-full bg-blue-200/45 blur-3xl dark:bg-blue-900/20" />
+            <div className="absolute right-[8%] top-[42%] h-64 w-64 rounded-full bg-cyan-100/60 blur-3xl dark:bg-cyan-900/10" />
           </div>
 
-          <div className="mx-auto max-w-6xl px-6 pb-12">
-            <dl className="grid grid-cols-3 divide-x divide-slate-200 rounded-2xl border border-slate-200 bg-white dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-900">
-              {STATS.map((stat) => (
-                <div key={stat.label} className="px-4 py-5 text-center sm:py-6">
-                  <dt className="text-xs font-medium uppercase tracking-wide text-slate-500 sm:text-sm dark:text-slate-400">
-                    {stat.label}
-                  </dt>
-                  <dd className="mt-1 text-2xl font-semibold text-slate-900 sm:text-3xl dark:text-white">{stat.value}</dd>
+          <div className="mx-auto max-w-7xl px-5 pb-12 pt-12 sm:px-6 sm:pb-16 sm:pt-16">
+            <div className="text-center">
+              <p className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-white/80 px-3.5 py-1.5 text-xs font-semibold tracking-wide text-blue-800 shadow-sm dark:border-blue-500/30 dark:bg-slate-900/80 dark:text-blue-300">
+                <span className="h-2 w-2 rounded-full bg-blue-600 ring-4 ring-blue-100 dark:ring-blue-500/20" aria-hidden />
+                The search engine for Nepal
+              </p>
+              <h1 className="mx-auto mt-5 text-[clamp(2rem,3.2vw,3.5rem)] font-semibold leading-tight tracking-[-0.04em] text-slate-950 dark:text-white lg:whitespace-nowrap">
+                Find what&rsquo;s published in Nepal <span className="text-blue-700 dark:text-blue-400">&mdash; by place.</span>
+              </h1>
+              <p className="mx-auto mt-4 max-w-3xl text-base leading-relaxed text-slate-600 sm:text-lg dark:text-slate-300">
+                Search news, government notices, universities and organisations across Nepal, with every result connected
+                to its province, district and municipality.
+              </p>
+            </div>
+
+            <div className="mt-9 grid grid-cols-1 items-stretch gap-5 lg:grid-cols-[0.9fr_1.1fr] lg:gap-6">
+              <div id="search" className="scroll-mt-24 flex flex-col justify-center rounded-3xl border border-slate-200/80 bg-white/90 p-5 shadow-xl shadow-blue-950/[0.04] backdrop-blur sm:p-8 dark:border-slate-800 dark:bg-slate-900/85">
+                <div className="mb-5 flex items-center gap-3">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white shadow-md shadow-blue-600/20">
+                    <Search className="h-5 w-5" aria-hidden />
+                  </span>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Search across Nepal</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">Find a topic, organisation or place</p>
+                  </div>
                 </div>
-              ))}
-            </dl>
+                <HomeSearch />
+                <dl className="mt-7 grid grid-cols-3 divide-x divide-slate-200 border-t border-slate-200 pt-5 dark:divide-slate-700 dark:border-slate-700">
+                  {STATS.map((stat) => (
+                    <div key={stat.label} className="px-2 text-center first:pl-0 last:pr-0">
+                      <dd className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl dark:text-white">{stat.value}</dd>
+                      <dt className="mt-1 text-[0.65rem] font-medium uppercase tracking-wide text-slate-500 sm:text-xs dark:text-slate-400">
+                        {stat.label}
+                      </dt>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+
+              <div className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white/90 p-4 shadow-xl shadow-blue-950/[0.04] backdrop-blur sm:p-5 dark:border-slate-800 dark:bg-slate-900/85">
+                <div className="mb-4 flex items-center justify-between gap-3 px-1">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Explore Nepal by province</p>
+                    <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Select a province to open the map</p>
+                  </div>
+                  <Link
+                    href="/map"
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/20"
+                  >
+                    Full map <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+                  </Link>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-3 dark:bg-slate-100">
+                  <ProvinceMap />
+                </div>
+              </div>
+            </div>
           </div>
         </section>
 
