@@ -33,8 +33,7 @@ class ProvinceNode(BaseModel):
 
 
 class GeoHierarchyResponse(BaseModel):
-    status: str = "success"
-    total_provinces: int
+    status: str = "success"=9    total_provinces: int
     total_districts: int
     total_municipalities: int
     provinces: list[ProvinceNode]
