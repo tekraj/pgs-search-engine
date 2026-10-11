@@ -233,6 +233,7 @@ def test_remote_backend_calls_chat_api_and_skips_local_model(monkeypatch):
     def fake_urlopen(request, timeout):
         seen["url"] = request.full_url
         seen["auth"] = request.get_header("Authorization")
+        seen["agent"] = request.get_header("User-agent")
         seen["body"] = __import__("json").loads(request.data)
         return _FakeResponse('"काठमाडौं"\n'.strip())
 
@@ -244,6 +245,8 @@ def test_remote_backend_calls_chat_api_and_skips_local_model(monkeypatch):
     load.assert_not_called()
     assert seen["url"].endswith("/chat/completions")
     assert seen["auth"] == "Bearer k"
+    # urllib's default agent is rejected by Cloudflare-fronted APIs such as Groq (403, 1010).
+    assert seen["agent"] and not seen["agent"].startswith("Python-urllib")
     assert seen["body"]["messages"][1]["content"] == "Kathmandu"
     translation._translate.cache_clear()
 
