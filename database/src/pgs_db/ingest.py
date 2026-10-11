@@ -263,6 +263,7 @@ def _ingest_run(
         o for o in source.documents(run_id) if watermark is None or o.last_modified >= watermark
     ]
     newest = watermark
+    has_failures = False
     for start in range(0, len(pending), _CHUNK):
         chunk = pending[start : start + _CHUNK]
         loaded = failed = 0
@@ -295,13 +296,21 @@ def _ingest_run(
                 if newest is None or obj.last_modified > newest:
                     newest = obj.last_modified
             state = _state(s, run_id, source.name)
-            state.last_modified = newest
             state.objects_loaded += loaded
             state.objects_failed += failed
+            if failed == 0:
+                state.last_modified = newest
+            else:
+                # A timestamp watermark cannot represent gaps. Leave it before this
+                # chunk so a later pass retries failed objects (and safely upserts
+                # any successful objects from the same chunk).
+                has_failures = True
         report.documents_loaded += loaded
         report.documents_failed += failed
+        if failed:
+            break
 
-    if status in TERMINAL:
+    if status in TERMINAL and not has_failures:
         with session_factory.begin() as s:
             state = _state(s, run_id, source.name)
             state.finished = True
