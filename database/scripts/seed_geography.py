@@ -8,6 +8,7 @@ Usage:  python scripts/seed_geography.py
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -24,12 +25,49 @@ EXPECTED_PROVINCES = 7
 EXPECTED_DISTRICTS = 77
 EXPECTED_LOCAL_BODIES = 753
 
+_CODE_PATTERNS = {
+    "province": re.compile(r"P[1-7]"),
+    "district": re.compile(r"D(?:0[1-9]|[1-6][0-9]|7[0-7])"),
+    "local body": re.compile(r"MUN\d{3}"),
+}
 
-def validate_geography(data: dict[str, list[dict[str, Any]]]) -> None:
-    """Validate geography counts, unique codes, and parent relationships."""
-    provinces = data.get("provinces", [])
-    districts = data.get("districts", [])
-    local_bodies = data.get("local_bodies", [])
+
+def _required_text(
+    row: dict[str, Any],
+    field: str,
+    location: str,
+    *,
+    max_length: int,
+    pattern: re.Pattern[str] | None = None,
+) -> str:
+    """Return a required non-empty string or raise a location-specific error."""
+    if field not in row:
+        raise ValueError(f"{location} is missing required field {field!r}")
+    value = row[field]
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{location}.{field} must be a non-empty string")
+    if len(value) > max_length:
+        raise ValueError(f"{location}.{field} exceeds {max_length} characters")
+    if pattern is not None and pattern.fullmatch(value) is None:
+        raise ValueError(f"{location}.{field} has an invalid value: {value!r}")
+    return value
+
+
+def validate_geography(data: Any) -> None:
+    """Validate seed structure, fields, codes, types, counts and parent links."""
+    if not isinstance(data, dict):
+        raise ValueError("Geography data must be a JSON object")
+
+    records: dict[str, list[Any]] = {}
+    for level in ("provinces", "districts", "local_bodies"):
+        rows = data.get(level)
+        if not isinstance(rows, list):
+            raise ValueError(f"Geography field {level!r} must be a list")
+        records[level] = rows
+
+    provinces = records["provinces"]
+    districts = records["districts"]
+    local_bodies = records["local_bodies"]
 
     if len(provinces) != EXPECTED_PROVINCES:
         raise ValueError(f"Expected {EXPECTED_PROVINCES} provinces, got {len(provinces)}")
@@ -41,6 +79,57 @@ def validate_geography(data: dict[str, list[dict[str, Any]]]) -> None:
         raise ValueError(
             f"Expected {EXPECTED_LOCAL_BODIES} local bodies, got {len(local_bodies)}"
         )
+
+    for index, row in enumerate(provinces):
+        location = f"provinces[{index}]"
+        if not isinstance(row, dict):
+            raise ValueError(f"{location} must be an object")
+        _required_text(
+            row, "code", location, max_length=4, pattern=_CODE_PATTERNS["province"]
+        )
+        _required_text(row, "name_en", location, max_length=100)
+        _required_text(row, "name_ne", location, max_length=100)
+
+    for index, row in enumerate(districts):
+        location = f"districts[{index}]"
+        if not isinstance(row, dict):
+            raise ValueError(f"{location} must be an object")
+        _required_text(
+            row, "code", location, max_length=4, pattern=_CODE_PATTERNS["district"]
+        )
+        _required_text(row, "province_code", location, max_length=4)
+        _required_text(row, "name_en", location, max_length=100)
+        _required_text(row, "name_ne", location, max_length=100)
+
+    for index, row in enumerate(local_bodies):
+        location = f"local_bodies[{index}]"
+        if not isinstance(row, dict):
+            raise ValueError(f"{location} must be an object")
+        _required_text(
+            row, "code", location, max_length=16, pattern=_CODE_PATTERNS["local body"]
+        )
+        _required_text(row, "district_code", location, max_length=4)
+        _required_text(row, "name_en", location, max_length=150)
+        _required_text(row, "name_ne", location, max_length=150)
+        body_type = _required_text(row, "type", location, max_length=64)
+        try:
+            LocalBodyType(body_type)
+        except ValueError as exc:
+            allowed = ", ".join(item.value for item in LocalBodyType)
+            raise ValueError(
+                f"{location}.type must be one of: {allowed}; got {body_type!r}"
+            ) from exc
+
+        website = row.get("website")
+        if website is not None and (not isinstance(website, str) or len(website) > 255):
+            raise ValueError(
+                f"{location}.website must be a string of at most 255 characters or null"
+            )
+        wards = row.get("wards")
+        if wards is not None and (
+            not isinstance(wards, int) or isinstance(wards, bool) or wards <= 0
+        ):
+            raise ValueError(f"{location}.wards must be a positive integer or null")
 
     province_codes = {row["code"] for row in provinces}
 
@@ -79,6 +168,7 @@ def validate_geography(data: dict[str, list[dict[str, Any]]]) -> None:
             "Local bodies reference unknown districts: "
             f"{sorted(invalid_local_body_parents)}"
         )
+
 
 def upsert(
     session: Session,

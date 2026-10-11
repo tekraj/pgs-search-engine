@@ -55,7 +55,7 @@ def test_rejects_duplicate_codes(geography: dict[str, Any], level: str) -> None:
 
 def test_rejects_district_with_unknown_province(geography: dict[str, Any]) -> None:
     broken = copy.deepcopy(geography)
-    broken["districts"][0]["province_code"] = "UNKNOWN"
+    broken["districts"][0]["province_code"] = "P8"
 
     with pytest.raises(ValueError, match="unknown provinces"):
         validate_geography(broken)
@@ -63,7 +63,87 @@ def test_rejects_district_with_unknown_province(geography: dict[str, Any]) -> No
 
 def test_rejects_local_body_with_unknown_district(geography: dict[str, Any]) -> None:
     broken = copy.deepcopy(geography)
-    broken["local_bodies"][0]["district_code"] = "UNKNOWN"
+    broken["local_bodies"][0]["district_code"] = "D78"
 
     with pytest.raises(ValueError, match="unknown districts"):
+        validate_geography(broken)
+
+
+@pytest.mark.parametrize(
+    ("level", "field"),
+    [
+        ("provinces", "name_en"),
+        ("districts", "province_code"),
+        ("local_bodies", "type"),
+    ],
+)
+def test_rejects_missing_required_fields(
+    geography: dict[str, Any], level: str, field: str
+) -> None:
+    broken = copy.deepcopy(geography)
+    del broken[level][0][field]
+
+    with pytest.raises(ValueError, match=f"missing required field '{field}'"):
+        validate_geography(broken)
+
+
+@pytest.mark.parametrize(
+    ("level", "field", "value"),
+    [
+        ("provinces", "code", " "),
+        ("provinces", "code", "P8"),
+        ("districts", "name_en", ""),
+        ("districts", "code", "D78"),
+        ("local_bodies", "name_ne", "  "),
+        ("local_bodies", "code", "MUN75A"),
+        ("provinces", "name_ne", 42),
+        ("districts", "code", ["D01"]),
+        ("local_bodies", "name_en", None),
+    ],
+)
+def test_rejects_empty_or_wrongly_typed_required_fields(
+    geography: dict[str, Any], level: str, field: str, value: Any
+) -> None:
+    broken = copy.deepcopy(geography)
+    broken[level][0][field] = value
+
+    with pytest.raises(ValueError, match=field):
+        validate_geography(broken)
+
+
+def test_rejects_non_object_records(geography: dict[str, Any]) -> None:
+    broken = copy.deepcopy(geography)
+    broken["local_bodies"][0] = None
+
+    with pytest.raises(ValueError, match=r"local_bodies\[0\] must be an object"):
+        validate_geography(broken)
+
+
+def test_rejects_non_list_geography_level(geography: dict[str, Any]) -> None:
+    broken = copy.deepcopy(geography)
+    broken["districts"] = {"code": "D01"}
+
+    with pytest.raises(ValueError, match="districts.*must be a list"):
+        validate_geography(broken)
+
+
+def test_rejects_unknown_local_body_type(geography: dict[str, Any]) -> None:
+    broken = copy.deepcopy(geography)
+    broken["local_bodies"][0]["type"] = "NEW_TYPE"
+
+    with pytest.raises(ValueError, match=r"local_bodies\[0\].type must be one of"):
+        validate_geography(broken)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("website", 7), ("wards", True), ("wards", 0)],
+)
+def test_rejects_invalid_optional_local_body_fields(
+    geography: dict[str, Any], field: str, value: Any
+) -> None:
+    broken = copy.deepcopy(geography)
+    broken["local_bodies"][0][field] = value
+
+    with pytest.raises(ValueError, match=field):
         validate_geography(broken)
