@@ -254,6 +254,16 @@ class TestDomainLookup:
         assert doc.domain_id is not None
         assert repo.domain_id_for_host("new.gov.np") == doc.domain_id
 
+    def test_www_and_bare_host_are_the_same_domain(self, repo: BronzeRepository) -> None:
+        first = repo.ensure_domain(f"WWW.{HOST}.")
+        assert repo.ensure_domain(HOST) == first
+        assert repo.domain_id_for_host(f"www.{HOST}") == first
+        result = repo.save_document(
+            scraper_document(host=f"www.{HOST}"), register_unknown_domains=True
+        )
+        doc = repo.session.get(CrawledDocument, result.id)
+        assert doc is not None and doc.domain_id == first
+
     def test_ensure_domain_is_idempotent_and_case_insensitive(
         self, repo: BronzeRepository
     ) -> None:

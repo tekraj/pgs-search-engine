@@ -90,7 +90,8 @@ _CANDIDATES_SQL = text(
     ) links
     WHERE h IS NOT NULL
       AND NOT EXISTS (
-          SELECT 1 FROM domains d WHERE d.domain = regexp_replace(links.h, '^www\.', '')
+          SELECT 1 FROM domains d
+          WHERE regexp_replace(d.domain, '^www\.', '') = regexp_replace(links.h, '^www\.', '')
       )
     GROUP BY h
     ORDER BY (h ~ '\.np$') DESC, count(DISTINCT src) DESC, h

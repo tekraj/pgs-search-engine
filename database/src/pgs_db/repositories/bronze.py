@@ -27,6 +27,17 @@ from ..models import CrawledDocument, CrawlRun, Domain, StoredFile
 from ._mapping import crawl_stats_columns, document_row, stored_file_row
 
 
+def site_host(host: str) -> str:
+    """The key `domains.domain` uses for a website: lower case, no trailing dot, no `www.`.
+
+    `www.apollo.edu.np` and `apollo.edu.np` are one website (the Go scraper resolves
+    `domain_id` the same way). Without this the ETL registered the `www.` form as a second
+    domain, so the website was crawled twice and its pages were not linked to the seed row.
+    """
+    h = host.strip().lower().rstrip(".")
+    return h[4:] if h.startswith("www.") else h
+
+
 @dataclass(frozen=True)
 class SaveResult:
     """Outcome of an upsert: the row id, and whether this call created it."""
@@ -63,7 +74,7 @@ class BronzeRepository:
         """
         if not host:
             return None
-        return self.session.scalar(select(Domain.id).where(Domain.domain == host.lower()))
+        return self.session.scalar(select(Domain.id).where(Domain.domain == site_host(host)))
 
     def ensure_domain(
         self,
@@ -79,7 +90,7 @@ class BronzeRepository:
         An existing row keeps its admin-set category/priority/status; only the id comes
         back. Use this when the crawler should auto-register the hosts it meets.
         """
-        normalized = host.lower()
+        normalized = site_host(host)
         inserted_id = self.session.scalar(
             insert(Domain)
             .values(
