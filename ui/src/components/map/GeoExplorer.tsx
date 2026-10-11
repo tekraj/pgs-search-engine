@@ -462,7 +462,7 @@ function MapContextBar({
       <>
         Try a district or municipality name in &ldquo;Find a place&rdquo;
         <span className="sm:hidden"> below</span>
-        <span className="hidden sm:inline"> on the left</span>, or click any district to read its local news.
+        <span className="hidden sm:inline"> on the left</span>, or click any district on the map.
       </>
     );
     action = (
@@ -479,18 +479,18 @@ function MapContextBar({
     title = `${titleCase(selectedDistrict)} district`;
     hint = (
       <>
-        In {getDistrictProvince(selectedDistrict) ?? selectedProvince}. Click any area inside it for local news, or pick
-        one from the list.
+        In {getDistrictProvince(selectedDistrict) ?? selectedProvince}. Click any area inside it to find pages about it, or
+        pick one from the list.
       </>
     );
     action = clearButton;
   } else if (selectedProvince) {
     title = selectedProvince;
-    hint = "Click a district to see its latest local news.";
+    hint = "Click a district to see its local governments and find pages about it.";
     action = clearButton;
   } else {
     title = "Explore Nepal by district";
-    hint = "Click any district to read its latest local news. Zoom in with + / − or your mouse wheel.";
+    hint = "Click any district to see its local governments and find pages about it. Zoom with + / − or your mouse wheel.";
   }
 
   return (

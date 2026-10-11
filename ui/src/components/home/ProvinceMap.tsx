@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { CSSProperties } from "react";
 import type { Position } from "geojson";
 import { PROVINCE_NAMES, getProvinceColor, type ProvinceCollection } from "@/lib/geo";
 
@@ -16,6 +17,7 @@ interface ProvinceShape {
   name: string;
   shortName: string;
   color: string;
+  darkColor: string;
   d: string;
   labelX: number;
   labelY: number;
@@ -79,6 +81,7 @@ function loadShapes() {
         name,
         shortName: name.replace(" Province", ""),
         color: getProvinceColor(name),
+        darkColor: getProvinceColor(name, true),
         d,
         labelX: cx / (3 * area),
         labelY: cy / (3 * area),
@@ -108,21 +111,22 @@ export async function ProvinceMap() {
           className="group outline-none"
         >
           <title>{`${shape.name} — open on the map`}</title>
+          {/* Colours come from CSS variables so dark mode can swap them
+              (this SVG is drawn on the server, which doesn't know the theme). */}
           <path
             d={shape.d}
-            fill={shape.color}
-            stroke="#ffffff"
             strokeWidth={2}
             strokeLinejoin="round"
-            className="cursor-pointer transition-[filter] duration-150 group-hover:brightness-90 group-focus-visible:brightness-90 group-focus-visible:[stroke:#1d4ed8] group-focus-visible:[stroke-width:4]"
+            style={{ "--fill": shape.color, "--fill-dark": shape.darkColor } as CSSProperties}
+            className="cursor-pointer fill-[var(--fill)] stroke-white transition-[filter] duration-150 group-hover:brightness-90 group-focus-visible:brightness-90 group-focus-visible:[stroke:#1d4ed8] group-focus-visible:[stroke-width:4] dark:fill-[var(--fill-dark)] dark:stroke-slate-900 dark:group-hover:brightness-110 dark:group-focus-visible:[stroke:#60a5fa]"
           />
           <text
             x={shape.labelX}
             y={shape.labelY}
             textAnchor="middle"
             dominantBaseline="middle"
-            className="pointer-events-none select-none fill-slate-900 text-[15px] font-semibold"
-            style={{ paintOrder: "stroke", stroke: "#ffffff", strokeWidth: 3, strokeLinejoin: "round" }}
+            className="pointer-events-none select-none fill-slate-900 stroke-white text-[19px] font-bold dark:fill-slate-50 dark:stroke-slate-900"
+            style={{ paintOrder: "stroke", strokeWidth: 4, strokeLinejoin: "round" }}
           >
             {shape.shortName}
           </text>

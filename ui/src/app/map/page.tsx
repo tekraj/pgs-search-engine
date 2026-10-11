@@ -7,7 +7,7 @@ import { DISTRICT_TO_PROVINCE, PROVINCE_NAMES, canonicalDistrictName, titleCase 
 type MapPageProps = { searchParams: Promise<Record<string, string | string[] | undefined>> };
 
 const DESCRIPTION =
-  "Interactive map of Nepal's 7 provinces, 77 districts and 753 local governments. Click any place for local news and key facts.";
+  "Interactive map of Nepal's 7 provinces, 77 districts and 753 local governments. Click any place for key facts and pages about it.";
 
 // Names the linked place in the browser tab and in shared links, e.g.
 // "/map?focus=Kaski" → "Kaski district — Map of Nepal · PGS Search". Must give

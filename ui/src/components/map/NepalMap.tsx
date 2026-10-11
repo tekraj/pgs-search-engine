@@ -75,8 +75,21 @@ function padProjected(bounds: L.LatLngBounds, metres: number): L.LatLngBounds {
 // Fly so that `bounds` fills the map (minus padding), landing on a view that
 // lies inside NEPAL_MAX_BOUNDS, so a border district isn't left looking at
 // empty space beyond the edge.
-function flyToFit(map: L.Map, bounds: L.LatLngBounds, padding: number, duration: number) {
-  const zoom = Math.min(map.getBoundsZoom(bounds, false, L.point(padding * 2, padding * 2)), map.getMaxZoom());
+// zoomOut: how many zoom levels to stay back from a tight fit, so the place is
+// shown with its surroundings (each level shows twice as much width and height).
+function flyToFit(map: L.Map, bounds: L.LatLngBounds, padding: number, duration: number, zoomOut = 0) {
+  // A map with no size yet (e.g. opened in a background tab) can't work out a
+  // zoom — the maths divides by zero and Leaflet throws. Fly once it has a size.
+  const size = map.getSize();
+  if (size.x === 0 || size.y === 0) {
+    map.once("resize", () => flyToFit(map, bounds, padding, duration, zoomOut));
+    return;
+  }
+  const fitZoom = Math.min(map.getBoundsZoom(bounds, false, L.point(padding * 2, padding * 2)), map.getMaxZoom());
+  if (!Number.isFinite(fitZoom)) return;
+  // Stay at least half a level closer than the whole-country view: at that
+  // view the map closes popups and re-centres on Nepal (see PanWhenZoomed).
+  const zoom = Math.max(fitZoom - zoomOut, Math.min(fitZoom, map.getMinZoom() + 0.5));
   const center = map.project(bounds.getSouthWest(), zoom).add(map.project(bounds.getNorthEast(), zoom)).divideBy(2);
   const limit = L.bounds(map.project(NEPAL_MAX_BOUNDS.getNorthWest(), zoom), map.project(NEPAL_MAX_BOUNDS.getSouthEast(), zoom));
   const half = map.getSize().divideBy(2);
@@ -120,6 +133,10 @@ function BoundsController({ keepViewRef }: { keepViewRef: React.RefObject<boolea
         const size = map.getSize();
         if (size.equals(fittedSize) || size.x === 0 || size.y === 0) return;
         fittedSize = size;
+        // Leaflet redraws the shapes only on "moveend". If its own window-resize
+        // handler already picked up the new size, invalidateSize() above was a
+        // no-op and nothing redraws — leaving the new space blank. Redraw now.
+        map.fire("moveend");
         const fitZoom = map.getBoundsZoom(NEPAL_BOUNDS, false, L.point(FIT_PADDING).multiplyBy(2));
         map.setMinZoom(Math.min(fitZoom, map.getZoom()));
         return;
@@ -293,7 +310,7 @@ function FocusHandler({
         (f) => f.properties.DISTRICT.toLowerCase() === focusRequest.name.toLowerCase()
       );
       if (feature) {
-        flyToFit(map, L.geoJSON(feature).getBounds(), 40, 0.8);
+        flyToFit(map, L.geoJSON(feature).getBounds(), 40, 0.8, 2);
       }
       return;
     }
@@ -305,7 +322,7 @@ function FocusHandler({
           f.properties.DISTRICT.toLowerCase() === (focusRequest.district ?? "").toLowerCase()
       );
       if (feature) {
-        flyToFit(map, L.geoJSON(feature).getBounds(), 60, 0.8);
+        flyToFit(map, L.geoJSON(feature).getBounds(), 60, 0.8, 2);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -355,6 +372,9 @@ export function NepalMap({
   );
   const newsPopupHandlers = useMemo(() => ({ remove: () => setNewsTarget(null) }), []);
   const [map, setMap] = useState<L.Map | null>(null);
+  // Draw shapes 50% beyond each edge of the view (Leaflet's default is 10%), so
+  // the map stays filled while it catches up after a resize or a fast pan.
+  const [renderer] = useState(() => L.svg({ padding: 0.5 }));
 
   // Selecting a district flies the map to it. Opening its news popup at the
   // same time breaks that for districts near the edge (Darchula, Humla,
@@ -721,6 +741,7 @@ export function NepalMap({
       </p>
       <MapContainer
         ref={setMap}
+        renderer={renderer}
         center={[28.3949, 84.124]}
         zoom={MIN_ZOOM}
         minZoom={MIN_ZOOM}
@@ -916,16 +937,14 @@ export function NepalMap({
           filter: drop-shadow(0 0 3px rgba(96, 165, 250, 0.7)) drop-shadow(0 0 12px rgba(96, 165, 250, 0.4));
         }
 
-        /* Popups are page UI, so they follow the page theme. */
-        @media (prefers-color-scheme: dark) {
-          .leaflet-popup-content-wrapper,
-          .leaflet-popup-tip {
-            background: #1e293b;
-            color: #e2e8f0;
-          }
-          .leaflet-container a.leaflet-popup-close-button {
-            color: #94a3b8;
-          }
+        /* Popups are page UI, so they follow the page theme (data-theme). */
+        [data-theme="dark"] .leaflet-popup-content-wrapper,
+        [data-theme="dark"] .leaflet-popup-tip {
+          background: #1e293b;
+          color: #e2e8f0;
+        }
+        [data-theme="dark"] .leaflet-container a.leaflet-popup-close-button {
+          color: #94a3b8;
         }
       `}</style>
     </div>
@@ -988,7 +1007,7 @@ function HoverCard({ target, taggingMode, dark }: { target: HoverTarget; tagging
       )}
       <p className="mt-1 flex items-center gap-1 text-xs font-medium text-blue-700 dark:text-blue-400">
         <MousePointerClick className="h-3.5 w-3.5" />
-        {taggingMode ? "Click to drop your pin here" : "Click to see local news"}
+        {taggingMode ? "Click to drop your pin here" : "Click to find pages about it"}
       </p>
     </div>
   );

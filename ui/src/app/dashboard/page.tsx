@@ -47,6 +47,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-10">
+      <h1 className="sr-only">Admin dashboard</h1>
       <Section
         id="overview"
         title="Overview"

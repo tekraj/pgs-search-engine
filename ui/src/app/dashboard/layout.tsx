@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { PgsLogo } from "@/components/home/PgsLogo";
 import { SectionNav, Sidebar } from "@/components/dashboard/Sidebar";
 import { SignOutButton } from "@/components/dashboard/SignOutButton";
+import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { roleLabel } from "@/components/dashboard/format";
 import { getSessionUser } from "@/lib/auth/session";
 
@@ -54,6 +55,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
                   Signed in as {user.username}, {role}
                 </span>
               </div>
+              <ThemeToggle className="hidden sm:inline-flex" />
               <SignOutButton />
             </div>
           </div>

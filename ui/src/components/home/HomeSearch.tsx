@@ -127,14 +127,17 @@ export function HomeSearch() {
                 setOpen(false);
               }
             }}
-            placeholder="Search news, notices, offices, or a place like “Kaski”"
+            placeholder="Search news or a place"
             className="h-11 min-w-0 flex-1 bg-transparent text-base text-slate-900 outline-none placeholder:text-slate-400 dark:text-slate-100 [&::-webkit-search-cancel-button]:hidden"
           />
+          {/* Icon-only on phones, so the box keeps room for what's typed. */}
           <button
             type="submit"
-            className="h-11 shrink-0 rounded-lg bg-blue-600 px-5 text-sm font-semibold text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900"
+            aria-label="Search"
+            className="flex h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-blue-600 px-3.5 text-sm font-semibold text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 sm:px-5 dark:focus-visible:ring-offset-slate-900"
           >
-            Search
+            <Search className="h-4 w-4 sm:hidden" aria-hidden />
+            <span className="hidden sm:inline">Search</span>
           </button>
         </div>
 
