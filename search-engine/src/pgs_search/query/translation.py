@@ -88,6 +88,9 @@ def _translate_remote(text: str, source_lang_code: str, target_lang_code: str) -
         headers={
             "Authorization": f"Bearer {settings.translation_api_key}",
             "Content-Type": "application/json",
+            # Hosted APIs behind Cloudflare (Groq) answer urllib's default agent with
+            # 403 "error code: 1010".
+            "User-Agent": "pgs-search-engine/1.0",
         },
     )
     with urllib.request.urlopen(request, timeout=settings.translation_api_timeout_seconds) as r:
