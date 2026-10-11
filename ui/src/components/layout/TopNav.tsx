@@ -1,13 +1,14 @@
 import Link from "next/link";
-import { LayoutDashboard, MapPinned } from "lucide-react";
+import { LayoutDashboard, MapPinned, UserRound } from "lucide-react";
 import { getSessionUser } from "@/lib/auth/session";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { PgsLogo } from "@/components/home/PgsLogo";
+import { getUser } from "@/lib/auth/user-session";
 
 // hideBrand: for pages that already show the logo right below (search), so
 // "PGS Search" doesn't appear twice.
 export async function TopNav({ hideBrand = false }: { hideBrand?: boolean }) {
-  const user = await getSessionUser();
+  const [user, member] = await Promise.all([getSessionUser(), getUser()]);
 
   return (
     <header className="flex items-center justify-between gap-3 px-4 py-4 text-sm sm:gap-4 sm:px-6">
@@ -36,18 +37,29 @@ export async function TopNav({ hideBrand = false }: { hideBrand?: boolean }) {
             <span className="hidden sm:inline">Dashboard</span>
           </Link>
         ) : null}
+        {member ? (
+          <Link href="/account" className="flex items-center gap-1.5 hover:underline">
+            <UserRound className="h-4 w-4" />
+            {member.display_name || member.email}
+          </Link>
+        ) : null}
         {user ? (
           <span className="hidden rounded-full bg-slate-800 px-3 py-1.5 text-xs font-medium text-white sm:inline-block dark:bg-slate-100 dark:text-slate-900">
             {user.username}
           </span>
-        ) : (
-          <Link
-            href="/login"
-            className="rounded-full bg-blue-600 px-4 py-1.5 font-medium text-white hover:bg-blue-700"
-          >
-            Sign in
-          </Link>
-        )}
+        ) : !member ? (
+          <>
+            <Link href="/signin" className="hover:underline">
+              Sign in
+            </Link>
+            <Link
+              href="/signup"
+              className="rounded-full bg-blue-600 px-4 py-1.5 font-medium text-white hover:bg-blue-700"
+            >
+              Sign up
+            </Link>
+          </>
+        ) : null}
       </nav>
     </header>
   );

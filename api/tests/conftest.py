@@ -6,7 +6,7 @@ puts api/src and the search engine's generated stubs on the path).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -19,10 +19,17 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from pgs_api.app import create_app
+from pgs_api.auth.throttle import LoginThrottle
 from pgs_api.auth.tokens import TokenCodec
-from pgs_api.core.services import Services
+from pgs_api.core.services import PasswordWorkers, Services
 from pgs_api.core.settings import Settings
-from pgs_api.db.database import AdminAccount, SearchLogEntry
+from pgs_api.db.database import (
+    AdminAccount,
+    EmailTaken,
+    HistoryItem,
+    SearchLogEntry,
+    UserAccount,
+)
 from pgs_api.grpc.client import SearchError, SearchHealth
 from pgs_api.health.readiness import ReadinessProbe
 from pgs_search.grpc.generated.search_pb2 import SearchRequest, SearchResponse
@@ -77,6 +84,11 @@ class FakeDatabase:
     logins: list[tuple[int, str | None]] = field(default_factory=list[tuple[int, str | None]])
     geo_calls: list[tuple[str, str | None]] = field(default_factory=list[tuple[str, str | None]])
     health_calls: int = 0
+    users: dict[int, UserAccount] = field(default_factory=dict[int, UserAccount])
+    history: list[tuple[int, HistoryItem]] = field(default_factory=list[tuple[int, HistoryItem]])
+    revoked: set[str] = field(default_factory=set[str])
+    failures: list[tuple[str, datetime]] = field(default_factory=list[tuple[str, datetime]])
+    next_id: int = 100
 
     def health(self) -> dict[str, Any]:
         self.health_calls += 1
@@ -153,6 +165,66 @@ class FakeDatabase:
             raise self.log_error
         self.logged.append(entry)
 
+    def is_token_revoked(self, token_id: str) -> bool:
+        return token_id in self.revoked
+
+    def revoke_token(self, token_id: str, expires_at: datetime) -> None:
+        self.revoked.add(token_id)
+
+    def count_login_failures(self, key: str, since: datetime) -> tuple[int, datetime | None]:
+        times = [t for k, t in self.failures if k == key and t >= since]
+        return len(times), min(times) if times else None
+
+    def add_login_failures(self, keys: Sequence[str]) -> None:
+        self.failures += [(k, datetime.now(UTC)) for k in keys]
+
+    def clear_login_failures(self, keys: Sequence[str]) -> None:
+        self.failures = [(k, t) for k, t in self.failures if k not in keys]
+
+    def find_user(self, email: str) -> UserAccount | None:
+        return next((u for u in self.users.values() if u.email == email.strip().lower()), None)
+
+    def get_user(self, user_id: int) -> UserAccount | None:
+        return self.users.get(user_id)
+
+    def create_user(self, email: str, password_hash: str, display_name: str | None) -> UserAccount:
+        if self.find_user(email) is not None:
+            raise EmailTaken(email)
+        self.next_id += 1
+        account = UserAccount(
+            self.next_id, email.strip().lower(), display_name, password_hash, True
+        )
+        self.users[account.id] = account
+        return account
+
+    def record_user_login(self, user_id: int, new_password_hash: str | None) -> None:
+        self.logins.append((user_id, new_password_hash))
+
+    def set_save_history(self, user_id: int, enabled: bool) -> None:
+        old = self.users[user_id]
+        self.users[user_id] = UserAccount(
+            old.id, old.email, old.display_name, old.password_hash, enabled
+        )
+
+    def list_history(self, user_id: int, limit: int, before_id: int | None) -> list[HistoryItem]:
+        rows = [h for uid, h in self.history if uid == user_id]
+        rows = [h for h in rows if before_id is None or h.id < before_id]
+        return sorted(rows, key=lambda h: h.id, reverse=True)[:limit]
+
+    def delete_history_item(self, user_id: int, item_id: int) -> bool:
+        before = len(self.history)
+        self.history = [(u, h) for u, h in self.history if not (u == user_id and h.id == item_id)]
+        return len(self.history) < before
+
+    def clear_history(self, user_id: int) -> int:
+        before = len(self.history)
+        self.history = [(u, h) for u, h in self.history if u != user_id]
+        return before - len(self.history)
+
+    def delete_user(self, user_id: int) -> None:
+        self.users.pop(user_id, None)
+        self.clear_history(user_id)
+
     def close(self) -> None:
         pass
 
@@ -222,6 +294,14 @@ class ApiClient:
     ) -> httpx.Response:
         return cast(httpx.Response, self._client.post(url, json=json, headers=headers))
 
+    def patch(
+        self, url: str, *, json: object = None, headers: Mapping[str, str] | None = None
+    ) -> httpx.Response:
+        return cast(httpx.Response, self._client.patch(url, json=json, headers=headers))
+
+    def delete(self, url: str, *, headers: Mapping[str, str] | None = None) -> httpx.Response:
+        return cast(httpx.Response, self._client.delete(url, headers=headers))
+
 
 def open_client(stack: ExitStack, app: FastAPI, **options: Any) -> ApiClient:
     """Start the app (its lifespan runs on enter, shutdown when `stack` closes)."""
@@ -257,6 +337,8 @@ def make_harness() -> Iterator[Callable[..., Harness]]:
                 tokens=codec,
                 search_log=search_log,
                 readiness=ReadinessProbe(db, search, cache_seconds=0),
+                throttle=LoginThrottle(db),
+                passwords=PasswordWorkers(settings.password_workers),
             )
             app = create_app(settings, services_factory=lambda _settings: services)
             return Harness(db, search, search_log, services, open_client(stack, app))

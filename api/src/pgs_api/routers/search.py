@@ -12,6 +12,7 @@ from pgs_search.grpc.generated.search_pb2 import SearchRequest as GrpcSearchRequ
 from pgs_search.grpc.generated.search_pb2 import SearchResponse as GrpcSearchResponse
 from pgs_search.grpc.generated.search_pb2 import SearchResultItem
 
+from ..auth.users import OptionalUser
 from ..core.services import ServicesDep
 from ..db.database import SearchLogEntry
 from ..grpc.client import SearchError
@@ -91,11 +92,13 @@ def to_response(params: SearchParams, response: GrpcSearchResponse, took_ms: int
     "/search",
     response_model=SearchResponse,
     summary="Full-text and semantic search with optional geo, language and type filters",
+    description="A valid user bearer token also adds the search to that user's history.",
     responses=_ERRORS,
 )
 def search(
     params: Annotated[SearchParams, Query()],
     services: ServicesDep,
+    user: OptionalUser,
 ) -> SearchResponse:
     started = time.perf_counter()
     try:
@@ -117,6 +120,9 @@ def search(
             filters=params.filters(),
             page_number=params.page,
             latency_ms=took_ms,
+            # A signed-in user's search also goes into their history (if they keep one).
+            user_id=user.user_id if user else None,
+            token_id=user.token_id if user else None,
         )
     )
     return body

@@ -147,9 +147,10 @@ an advisory lock (an overlapping run skips), prints one JSON line, and exits non
 | `ingest` | load runs and documents from an S3 bucket into Bronze (a backfill tool now that the ETL writes Bronze; skipped unless `PGS_S3_BUCKET` is set) | not scheduled |
 | `stats` | rebuild `domain_stats`, `geo_content_stats` | every 15 min |
 | `scores` | rebuild `page_scores` (PageRank, freshness, quality) and domain authority | hourly |
+| `discover-domains` | register live Nepali websites linked from crawled pages (`external_links`) as new `PENDING`, `LOW`-priority `domains`; `.np` hosts always, other hosts only if the homepage looks Nepali; `--discover-limit` (200) hosts per run, `--discover-days` (30) look-back, `--discover-seconds` (180) network budget | hourly |
 | `reference` | link domains to local bodies, fill missing municipality contacts | daily |
 | `release-stale` | return ETL / indexing claims stuck > `--stale-minutes` (30) | every 10 min |
-| `purge` | error logs older than `--error-days` (90), searches older than `--search-days` (365) | daily |
+| `purge` | error logs older than `--error-days` (90), anonymous searches older than `--search-days` (90), expired revoked-token ids, login failures older than a day | daily |
 
 `pgs_db.health.check` reports Gold older than 6 hours as `degraded`, so a stopped scheduler shows up.
 

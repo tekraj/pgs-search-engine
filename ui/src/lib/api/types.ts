@@ -158,3 +158,54 @@ export function isReadinessReport(value: unknown): value is ReadinessReport {
     isRecord(value.checks.search)
   );
 }
+
+export interface UserProfile {
+  email: string;
+  display_name: string | null;
+  save_history: boolean;
+}
+
+export interface UserAuthResponse {
+  access_token: string;
+  token_type: "bearer";
+  expires_in: number;
+  user: UserProfile;
+}
+
+export interface HistoryEntry {
+  id: number;
+  query: string;
+  filters: Record<string, unknown>;
+  result_count: number;
+  searched_at: string;
+}
+
+export interface HistoryPage {
+  items: HistoryEntry[];
+  next_before: number | null;
+}
+
+export function isUserProfile(value: unknown): value is UserProfile {
+  return isRecord(value) && typeof value.email === "string" && typeof value.save_history === "boolean";
+}
+
+export function isUserAuthResponse(value: unknown): value is UserAuthResponse {
+  return (
+    isRecord(value) &&
+    typeof value.access_token === "string" &&
+    typeof value.expires_in === "number" &&
+    isUserProfile(value.user)
+  );
+}
+
+export function isHistoryPage(value: unknown): value is HistoryPage {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.items) &&
+    value.items.every((item) => isRecord(item) && typeof item.id === "number" && typeof item.query === "string")
+  );
+}
+
+export function isCleared(value: unknown): value is { deleted: number } {
+  return isRecord(value) && typeof value.deleted === "number";
+}

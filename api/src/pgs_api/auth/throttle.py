@@ -1,67 +1,73 @@
-"""Per-account brake on failed logins (in memory, per API process).
+"""Brake on failed logins, kept in PostgreSQL so every API process and restart shares it.
 
-After `max_failures` wrong passwords for one login within `window_seconds`, that login is
-refused until the oldest failure ages out, whatever password comes next. The nginx limit
-caps one client's rate; this caps what a spread-out attacker can try against one account.
-It is per process, so with N API workers an attacker gets up to N times the allowance.
+Two limits, both over a sliding window (`login_failures` rows):
+
+- per (client address, account): `max_failures` wrong passwords from one address against
+  one account lock out that address for that account only. Someone who knows an admin's
+  name can no longer lock the admin out from everywhere.
+- per account: `account_max_failures` (much higher) failures from anywhere refuse further
+  logins to the account, which caps a spread-out attack. Real owners are rarely near it.
+
+An account is identified by its id once it exists (so logging in with the username or the
+email counts against the same limit) and by the typed login while it does not. The client
+address comes from nginx's X-Real-IP.
 """
 
 from __future__ import annotations
 
-import threading
-import time
-from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime, timedelta
+from typing import Protocol
 
-# Keys kept at most; the oldest are dropped first so a flood of random logins cannot grow
-# the table without bound.
-MAX_TRACKED_LOGINS = 10_000
+
+class FailureStore(Protocol):
+    def count_login_failures(self, key: str, since: datetime) -> tuple[int, datetime | None]: ...
+
+    def add_login_failures(self, keys: Sequence[str]) -> None: ...
+
+    def clear_login_failures(self, keys: Sequence[str]) -> None: ...
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
 class LoginThrottle:
     def __init__(
         self,
+        store: FailureStore,
         max_failures: int = 5,
+        account_max_failures: int = 30,
         window_seconds: float = 900.0,
         *,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Callable[[], datetime] = _utcnow,
     ) -> None:
+        self._store = store
         self._max = max_failures
-        self._window = window_seconds
+        self._account_max = account_max_failures
+        self._window = timedelta(seconds=window_seconds)
         self._clock = clock
-        self._failures: dict[str, deque[float]] = {}
-        self._lock = threading.Lock()
 
-    def _recent(self, key: str, now: float) -> deque[float]:
-        failures = self._failures.get(key)
-        if failures is None:
-            return deque()
-        while failures and now - failures[0] >= self._window:
-            failures.popleft()
-        if not failures:
-            del self._failures[key]
-        return failures
+    @staticmethod
+    def _keys(identity: str, ip: str) -> tuple[str, str]:
+        identity = identity.casefold()
+        return f"ip:{ip}|{identity}"[:400], f"acct:{identity}"[:400]
 
-    def retry_after(self, login: str) -> int:
-        """Seconds until `login` may try again; 0 when it may try now."""
-        key = login.casefold()
-        with self._lock:
-            now = self._clock()
-            failures = self._recent(key, now)
-            if len(failures) < self._max:
-                return 0
-            return max(1, int(self._window - (now - failures[0])) + 1)
+    def retry_after(self, identity: str, ip: str) -> int:
+        """Seconds until this address may try this account again; 0 when it may try now."""
+        now = self._clock()
+        since = now - self._window
+        wait = 0
+        for key, limit in zip(
+            self._keys(identity, ip), (self._max, self._account_max), strict=True
+        ):
+            count, oldest = self._store.count_login_failures(key, since)
+            if count >= limit and oldest is not None:
+                wait = max(wait, int((oldest + self._window - now).total_seconds()) + 1)
+        return max(wait, 1) if wait else 0
 
-    def record_failure(self, login: str) -> None:
-        key = login.casefold()
-        with self._lock:
-            now = self._clock()
-            failures = self._recent(key, now)
-            failures.append(now)
-            self._failures[key] = failures
-            while len(self._failures) > MAX_TRACKED_LOGINS:
-                del self._failures[next(iter(self._failures))]
+    def record_failure(self, identity: str, ip: str) -> None:
+        self._store.add_login_failures(self._keys(identity, ip))
 
-    def record_success(self, login: str) -> None:
-        with self._lock:
-            self._failures.pop(login.casefold(), None)
+    def record_success(self, identity: str, ip: str) -> None:
+        self._store.clear_login_failures(self._keys(identity, ip)[:1])

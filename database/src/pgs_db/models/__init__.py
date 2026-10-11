@@ -1,5 +1,6 @@
 """Import every model here so Alembic autogenerate sees all tables."""
 
+from .accounts import LoginFailure, RevokedToken, User, UserSearchHistory
 from .crawl import BronzeIngestState, CrawledDocument, CrawlRun, StoredFile
 from .domain import Domain
 from .geography import District, LocalBody, Province, RegionLink
@@ -45,6 +46,7 @@ __all__ = [
     "ErrorLog",
     "GeoContentStats",
     "LocalBody",
+    "LoginFailure",
     # silver
     "Page",
     "PageContact",
@@ -58,9 +60,12 @@ __all__ = [
     "QuarantinedFile",
     "RegionLink",
     "RelevanceJudgment",
+    "RevokedToken",
     "SearchClick",
     "SearchQuery",
     "StoredFile",
+    "User",
+    "UserSearchHistory",
     # views (read-only)
     "page_geo_codes",
     "search_documents",

@@ -8,6 +8,7 @@ import { ResultItem } from "@/components/search/ResultItem";
 import { PgsLogo } from "@/components/home/PgsLogo";
 import { apiFetch } from "@/lib/api/server";
 import { MAX_QUERY_LENGTH, MAX_RESULT_WINDOW, isSearchResponse } from "@/lib/api/types";
+import { getUserToken } from "@/lib/auth/user-session";
 
 const PAGE_SIZE = 10;
 
@@ -30,8 +31,11 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const maxPage = Math.floor(MAX_RESULT_WINDOW / PAGE_SIZE);
   const page = Number.isFinite(requestedPage) ? Math.min(Math.max(requestedPage, 1), maxPage) : 1;
 
+  // A signed-in user's token makes the API add this search to their history.
+  const token = q ? await getUserToken() : null;
   const result = q
     ? await apiFetch("/api/v1/search", isSearchResponse, {
+        token: token ?? undefined,
         searchParams: { q, page, limit: PAGE_SIZE },
       })
     : null;

@@ -208,6 +208,15 @@ binaries' flags (`scraper/internal/envflag`: every flag is also an env var).
   an HMAC-SHA256-signed token (`API_AUTH_SECRET`); the UI keeps it in an httpOnly,
   SameSite=Lax cookie (Secure over https) and verifies it with the API on every request.
   Admin accounts: `docker compose run --rm db-migrate python scripts/create_admin.py`.
+  Sign-out revokes the token id (`revoked_tokens`); failed logins are counted in
+  `login_failures` (per address+account and per account), so the brake survives restarts
+  and several API processes.
+- Public accounts: anyone can register (`POST /api/v1/account/register`, table `users`);
+  the UI keeps that session in its own cookie (`pgs_user`). A search sent with the user's
+  token is also written to `user_search_history` unless they turned history off; users
+  list, delete and clear it, or delete the account (cascade). Anonymous searches in
+  `search_queries` hold no account and are purged after 90 days. Only the API role reads
+  `users`, `user_search_history`, `revoked_tokens` and `login_failures`.
 - The search engine loads its reranker from LightGBM's text format (no pickle); the
   Nepali lemmatizer is still a pickle shipped in the image (trusted build artifact).
 - Containers run as non-root with `no-new-privileges` and all capabilities dropped where

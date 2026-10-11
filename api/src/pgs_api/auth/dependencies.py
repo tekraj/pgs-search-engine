@@ -14,7 +14,7 @@ import secrets
 from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from pgs_db.security import hash_password, needs_rehash, verify_password
@@ -41,6 +41,27 @@ class Principal:
     username: str
     email: str | None
     role: str
+    token_id: str = ""
+    token_expires_at: int = 0
+
+
+def client_ip(request: Request) -> str:
+    """The caller's address: nginx's X-Real-IP (the UI server forwards it), else the socket's."""
+    forwarded = request.headers.get("x-real-ip", "").strip()
+    if forwarded:
+        return forwarded[:64]
+    return request.client.host if request.client else "unknown"
+
+
+ClientIp = Annotated[str, Depends(client_ip)]
+
+
+def too_many_attempts(wait: int) -> HTTPException:
+    return HTTPException(
+        status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="Too many failed logins; try again later.",
+        headers={"Retry-After": str(wait)},
+    )
 
 
 def unauthorized(detail: str) -> HTTPException:
@@ -86,11 +107,18 @@ def current_admin(
     except TokenError as exc:
         logger.info("bearer token rejected", extra={"reason": str(exc)})
         raise unauthorized("Invalid or expired token.") from None
+    if services.db.is_token_revoked(claims.token_id):
+        raise unauthorized("This token was signed out.")
     account = services.db.find_admin(claims.subject)
     if account is None or account.id != claims.user_id:
         raise unauthorized("This account is no longer active.")
     return Principal(
-        user_id=account.id, username=account.username, email=account.email, role=account.role
+        user_id=account.id,
+        username=account.username,
+        email=account.email,
+        role=account.role,
+        token_id=claims.token_id,
+        token_expires_at=claims.expires_at,
     )
 
 

@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { apiFetch } from "@/lib/api/server";
+import { apiFetch, clientIpOf } from "@/lib/api/server";
 import { isLoginResponse } from "@/lib/api/types";
 import { SESSION_COOKIE } from "@/lib/auth/session";
 import { serverEnv } from "@/lib/env";
@@ -23,6 +23,7 @@ export async function POST(request: NextRequest) {
   const result = await apiFetch("/api/v1/auth/login", isLoginResponse, {
     method: "POST",
     body: credentials,
+    clientIp: clientIpOf(request),
   });
   if (!result.ok) {
     const status = [401, 429, 503].includes(result.status) ? result.status : 502;

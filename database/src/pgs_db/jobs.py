@@ -12,7 +12,8 @@ JSON line per job; exits non-zero if any job failed.
 | `scores` | rebuild `page_scores` and domain authority | hourly |
 | `reference` | link domains to local bodies, fill missing municipality contacts | daily |
 | `release-stale` | free claims stuck longer than `--stale-minutes` | every 10 min |
-| `purge` | drop error logs older than `--error-days`, searches older than `--search-days` | daily |
+| `discover-domains` | add live Nepali sites linked from crawled pages to `domains` | hourly |
+| `purge` | drop old logs, anonymous searches, revoked tokens, login failures | daily |
 | `all` | every job above, in that order | -- |
 """
 
@@ -28,8 +29,10 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from .discovery import discover_domains
 from .ingest import S3Source, ingest
 from .repositories import (
+    AccountsRepository,
     OpsRepository,
     RankingRepository,
     ReferenceRepository,
@@ -78,6 +81,16 @@ def _reference(session: Session, _: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _discover(session: Session, args: argparse.Namespace) -> dict[str, Any]:
+    return discover_domains(
+        session,
+        days=args.discover_days,
+        limit=args.discover_limit,
+        max_seconds=args.discover_seconds,
+        require_nepali_content=not args.discover_any_content,
+    )
+
+
 def _release_stale(session: Session, args: argparse.Namespace) -> dict[str, Any]:
     window = timedelta(minutes=args.stale_minutes)
     return {
@@ -89,6 +102,7 @@ def _release_stale(session: Session, args: argparse.Namespace) -> dict[str, Any]
 def _purge(session: Session, args: argparse.Namespace) -> dict[str, Any]:
     now = datetime.now(UTC)
     return {
+        **AccountsRepository(session).purge_auth_bookkeeping(now=now),
         "error_logs_deleted": OpsRepository(session).purge_errors(
             now - timedelta(days=args.error_days)
         ),
@@ -104,6 +118,7 @@ JOBS: dict[str, JobFn] = {
     "scores": _scores,
     "reference": _reference,
     "release-stale": _release_stale,
+    "discover-domains": _discover,
     "purge": _purge,
 }
 
@@ -130,7 +145,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("job", choices=[*JOBS, "all"])
     parser.add_argument("--stale-minutes", type=int, default=30)
     parser.add_argument("--error-days", type=int, default=90)
-    parser.add_argument("--search-days", type=int, default=365)
+    parser.add_argument("--search-days", type=int, default=90)
+    parser.add_argument("--discover-days", type=int, default=30, help="link look-back window")
+    parser.add_argument("--discover-limit", type=int, default=200, help="hosts checked per run")
+    parser.add_argument("--discover-seconds", type=float, default=180, help="network time budget")
+    parser.add_argument(
+        "--discover-any-content",
+        action="store_true",
+        help="also accept non-.np hosts whose homepage does not look Nepali",
+    )
     return parser.parse_args(argv)
 
 
