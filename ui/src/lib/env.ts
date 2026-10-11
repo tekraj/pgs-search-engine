@@ -8,7 +8,7 @@
  *   API's SEARCH_TIMEOUT_SECONDS so the API's own 504 reaches the page.
  * - CLIENT_IP_SOURCE (default x-real-ip): which proxy header names the real client for the
  *   API's login throttle: x-real-ip (nginx), x-forwarded-for (the last entry, one proxy hop
- *   such as Traefik or a Gateway) or socket (none). Trust only a header your proxy sets.
+ *   such as Traefik or a Gateway), cf-connecting-ip (Cloudflare Tunnel) or socket (none). Trust only a header your proxy sets.
  * - SESSION_COOKIE_SECURE (default auto): auto marks the session cookie Secure when the
  *   request came in over https (X-Forwarded-Proto from nginx, or the URL); always/never
  *   force it.
@@ -19,7 +19,7 @@
 
 export type CookieSecureMode = "auto" | "always" | "never";
 
-export type ClientIpSource = "x-real-ip" | "x-forwarded-for" | "socket";
+export type ClientIpSource = "x-real-ip" | "x-forwarded-for" | "cf-connecting-ip" | "socket";
 
 export interface ServerEnv {
   clientIpSource: ClientIpSource;
@@ -79,10 +79,10 @@ export function readServerEnv(env: Record<string, string | undefined> = process.
   let clientIpSource = DEFAULTS.clientIpSource;
   const rawIp = env.CLIENT_IP_SOURCE?.trim().toLowerCase();
   if (rawIp) {
-    if (rawIp === "x-real-ip" || rawIp === "x-forwarded-for" || rawIp === "socket") {
+    if (rawIp === "x-real-ip" || rawIp === "x-forwarded-for" || rawIp === "cf-connecting-ip" || rawIp === "socket") {
       clientIpSource = rawIp;
     } else {
-      problems.push("CLIENT_IP_SOURCE must be x-real-ip, x-forwarded-for or socket");
+      problems.push("CLIENT_IP_SOURCE must be x-real-ip, x-forwarded-for, cf-connecting-ip or socket");
     }
   }
 

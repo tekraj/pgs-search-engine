@@ -23,6 +23,7 @@ interface ApiOptions {
 export function clientIpOf(request: Request): string | undefined {
   const source = serverEnv().clientIpSource;
   if (source === "x-real-ip") return request.headers.get("x-real-ip")?.trim() || undefined;
+  if (source === "cf-connecting-ip") return request.headers.get("cf-connecting-ip")?.trim() || undefined;
   if (source === "x-forwarded-for") {
     // One proxy hop appends the address it saw as the last entry.
     return request.headers.get("x-forwarded-for")?.split(",").at(-1)?.trim() || undefined;

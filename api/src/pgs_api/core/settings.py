@@ -68,8 +68,12 @@ class Settings(BaseModel):
     # Which proxy header names the real client, for the per-address login throttle. Only
     # trust a header your own proxy sets or overwrites: "x-real-ip" (nginx, the compose
     # default), "x-forwarded-for" (the LAST entry, appended by one proxy hop such as
-    # Traefik or a Gateway; earlier entries are client-supplied), or "socket" (none).
-    client_ip_source: Literal["x-real-ip", "x-forwarded-for", "socket"] = "x-real-ip"
+    # Traefik or a Gateway; earlier entries are client-supplied), "cf-connecting-ip" (behind
+    # a Cloudflare Tunnel, where every hop sees only the tunnel; Cloudflare sets the header,
+    # so only use it when the origin is reachable through the tunnel alone), or "socket".
+    client_ip_source: Literal["x-real-ip", "x-forwarded-for", "cf-connecting-ip", "socket"] = (
+        "x-real-ip"
+    )
     # Browser origins allowed to call the API cross-origin. Empty: no CORS headers at all
     # (the UI goes through nginx on the same origin, or calls the API server-side).
     cors_origins: tuple[str, ...] = ()

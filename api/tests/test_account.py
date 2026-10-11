@@ -215,3 +215,27 @@ def test_client_address_follows_the_configured_proxy_header(harness: Harness) ->
         "/api/v1/account/login", json=bad, headers={"X-Forwarded-For": "9.9.9.9, 7.7.7.7"}
     )
     assert blocked.status_code == 429
+
+
+def test_cloudflare_tunnel_client_address(harness: Harness) -> None:
+    _register(harness)
+    harness.services.settings = harness.services.settings.model_copy(
+        update={"client_ip_source": "cf-connecting-ip"}
+    )
+    bad = {"email": EMAIL, "password": "wrong password!"}
+    # Every request arrives from the tunnel; visitors are told apart by CF-Connecting-IP.
+    for _ in range(5):
+        headers = {"CF-Connecting-IP": "203.0.113.7", "X-Forwarded-For": "10.20.0.50"}
+        assert (
+            harness.client.post("/api/v1/account/login", json=bad, headers=headers).status_code
+            == 401
+        )
+    attacker = harness.client.post(
+        "/api/v1/account/login", json=bad, headers={"CF-Connecting-IP": "203.0.113.7"}
+    )
+    other = harness.client.post(
+        "/api/v1/account/login",
+        json={"email": EMAIL, "password": PASSWORD},
+        headers={"CF-Connecting-IP": "198.51.100.9"},
+    )
+    assert attacker.status_code == 429 and other.status_code == 200

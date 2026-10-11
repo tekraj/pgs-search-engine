@@ -55,6 +55,8 @@ def client_ip(request: Request, services: ServicesDep) -> str:
     value = ""
     if source == "x-real-ip":
         value = request.headers.get("x-real-ip", "").strip()
+    elif source == "cf-connecting-ip":
+        value = request.headers.get("cf-connecting-ip", "").strip()
     elif source == "x-forwarded-for":
         # One proxy hop appends the address it saw as the LAST entry.
         value = request.headers.get("x-forwarded-for", "").rsplit(",", 1)[-1].strip()

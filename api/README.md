@@ -65,7 +65,7 @@ scripts/create_admin.py <username> --email <address>`.
 | `API_USER_TOKEN_TTL_SECONDS` | `604800` | public-site user token lifetime |
 | `API_WORKER_THREADS` | `100` | threads for the synchronous routes |
 | `API_PASSWORD_WORKERS` | `4` | password hashes running at once |
-| `API_CLIENT_IP_SOURCE` | `x-real-ip` | which proxy header names the client for the login throttle: `x-real-ip` (nginx), `x-forwarded-for` (last entry; Traefik / Gateway) or `socket`. Trust only a header your proxy sets or overwrites |
+| `API_CLIENT_IP_SOURCE` | `x-real-ip` | which proxy header names the client for the login throttle: `x-real-ip` (nginx), `x-forwarded-for` (last entry; Traefik / Gateway), `cf-connecting-ip` (Cloudflare Tunnel) or `socket`. Trust only a header your proxy sets or overwrites |
 | `API_CORS_ORIGINS` | empty (no CORS) | comma-separated browser origins allowed cross-origin |
 | `LOG_LEVEL` | `INFO` | JSON logs with a request id per request; query strings are not logged |
 
