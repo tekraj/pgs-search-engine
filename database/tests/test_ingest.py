@@ -6,7 +6,7 @@ listing is checked against a stub client.
 
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -178,6 +178,31 @@ class TestRunningRun:
 
 
 class TestBadObjects:
+    def test_terminal_run_with_failed_object_is_not_finished_or_watermarked(
+        self, session: Session, factory: sessionmaker[Session], tmp_path: Path
+    ) -> None:
+        base = bucket(tmp_path)
+        broken = base / str(RUN) / "broken.json"
+        modified = T0 + timedelta(minutes=1)
+        write(broken, "{not json", modified)
+        source = DirectorySource(tmp_path, "staging")
+
+        report = ingest(factory, source)
+
+        assert report.documents_failed == 1
+        state = session.scalar(
+            select(BronzeIngestState).where(BronzeIngestState.crawl_run_id == RUN)
+        )
+        assert state is not None
+        assert not state.finished
+        assert state.last_modified is None
+
+        write(broken, document(3), modified)
+        retried = ingest(factory, source)
+        assert retried.documents_loaded == 3  # successful rows are safely upserted again
+        session.refresh(state)
+        assert state.finished
+
     def test_a_malformed_object_is_logged_and_the_rest_still_load(
         self, session: Session, factory: sessionmaker[Session], tmp_path: Path
     ) -> None:
