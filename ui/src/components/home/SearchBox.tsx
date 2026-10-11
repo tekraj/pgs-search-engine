@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Mic, Search, X } from "lucide-react";
+import { Search, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 interface Suggestion {
@@ -92,7 +92,6 @@ export function SearchBox({
             <X className="h-4 w-4" />
           </button>
         )}
-        <Mic className="h-4 w-4 shrink-0 text-blue-500" />
       </form>
 
       {focused && suggestions.length > 0 && (

@@ -40,7 +40,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
 
   return (
     <div className="flex min-h-screen flex-col bg-white font-sans text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-      <TopNav />
+      <TopNav hideBrand />
 
       <header className="border-b border-slate-200 dark:border-slate-800">
         <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 pt-2 sm:flex-row sm:items-center sm:gap-6 sm:px-6">
