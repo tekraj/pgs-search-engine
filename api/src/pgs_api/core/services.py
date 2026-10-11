@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import logging
+import threading
+from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request, status
 
+from ..auth.throttle import LoginThrottle
 from ..auth.tokens import TokenCodec
 from ..db.database import Database, PgDatabase
 from ..db.search_log import SearchLogSink, SearchLogWriter
@@ -16,6 +20,34 @@ from ..health.readiness import ReadinessProbe
 from .settings import Settings
 
 logger = logging.getLogger(__name__)
+
+
+PASSWORD_SLOT_WAIT_SECONDS = 3.0
+
+
+class PasswordWorkers:
+    """Caps the Argon2id hashes running at once (they cost ~64 MiB and tens of ms each).
+
+    Routes run on a shared thread pool; without a cap a login flood would hold every
+    thread in a hash and starve search. A request waits briefly for a slot, then gets 503.
+    """
+
+    def __init__(self, slots: int, wait_seconds: float = PASSWORD_SLOT_WAIT_SECONDS) -> None:
+        self._slots = threading.BoundedSemaphore(slots)
+        self._wait = wait_seconds
+
+    @contextmanager
+    def slot(self) -> Generator[None, None, None]:
+        if not self._slots.acquire(timeout=self._wait):
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Too many sign-ins in progress. Try again shortly.",
+                headers={"Retry-After": "2"},
+            )
+        try:
+            yield
+        finally:
+            self._slots.release()
 
 
 @dataclass
@@ -27,6 +59,8 @@ class Services:
     tokens: TokenCodec | None
     search_log: SearchLogSink
     readiness: ReadinessProbe
+    throttle: LoginThrottle
+    passwords: PasswordWorkers
 
     def close(self) -> None:
         self.search_log.close()
@@ -55,6 +89,8 @@ def build_services(settings: Settings) -> Services:
         tokens=tokens,
         search_log=SearchLogWriter(db),
         readiness=ReadinessProbe(db, search),
+        throttle=LoginThrottle(db),
+        passwords=PasswordWorkers(settings.password_workers),
     )
 
 

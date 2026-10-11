@@ -8,11 +8,23 @@ export type ApiResult<T> =
   | { ok: false; status: number; error: string };
 
 interface ApiOptions {
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "PATCH" | "DELETE";
   token?: string;
+  /** The browser's address, passed on as X-Real-IP so the API's login throttle counts the right client. */
+  clientIp?: string;
   body?: unknown;
   searchParams?: Record<string, string | number | undefined>;
 }
+
+/** The caller's address as nginx saw it (it sets X-Real-IP), for `clientIp`. */
+export function clientIpOf(request: Request): string | undefined {
+  const real = request.headers.get("x-real-ip")?.trim();
+  if (real) return real;
+  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || undefined;
+}
+
+/** For endpoints that answer 204 No Content: the body is null. */
+export const isEmpty = (value: unknown): value is null => value === null;
 
 /** Call the API with a timeout. Never throws: network failures come back as status 0. */
 export async function apiFetch<T>(
@@ -26,6 +38,7 @@ export async function apiFetch<T>(
     if (value !== undefined && value !== "") url.searchParams.set(name, String(value));
   }
   const headers: Record<string, string> = { Accept: "application/json" };
+  if (options.clientIp) headers["X-Real-IP"] = options.clientIp;
   if (options.token) headers.Authorization = `Bearer ${options.token}`;
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
 

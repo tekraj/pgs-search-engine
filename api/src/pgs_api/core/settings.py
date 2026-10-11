@@ -26,6 +26,9 @@ ENV_VARS: dict[str, str] = {
     "SEARCH_TIMEOUT_SECONDS": "search_timeout_seconds",
     "API_AUTH_SECRET": "auth_secret",
     "API_TOKEN_TTL_SECONDS": "token_ttl_seconds",
+    "API_USER_TOKEN_TTL_SECONDS": "user_token_ttl_seconds",
+    "API_WORKER_THREADS": "worker_threads",
+    "API_PASSWORD_WORKERS": "password_workers",
     "API_CORS_ORIGINS": "cors_origins",
     "LOG_LEVEL": "log_level",
 }
@@ -54,6 +57,13 @@ class Settings(BaseModel):
     # Unset: the API serves search, geo and health, and the auth/admin endpoints answer 503.
     auth_secret: SecretStr | None = None
     token_ttl_seconds: int = Field(default=8 * 3600, ge=60, le=7 * 24 * 3600)
+    # Lifetime of a public-site user's token (admins use token_ttl_seconds).
+    user_token_ttl_seconds: int = Field(default=7 * 24 * 3600, ge=60, le=90 * 24 * 3600)
+    # Threads available to the (synchronous) routes; Starlette's default is 40.
+    worker_threads: int = Field(default=100, ge=10, le=1000)
+    # Password hashes (Argon2id: ~64 MiB and tens of ms each) running at once. More wait up
+    # to 3 s for a slot, then get 503, so a login flood cannot occupy every route thread.
+    password_workers: int = Field(default=4, ge=1, le=64)
     # Browser origins allowed to call the API cross-origin. Empty: no CORS headers at all
     # (the UI goes through nginx on the same origin, or calls the API server-side).
     cors_origins: tuple[str, ...] = ()

@@ -58,7 +58,10 @@ _GOLD_SUMMARIES = ("domain_stats", "geo_content_stats", "page_scores")
 _SEARCH_LOG = ("search_queries", "search_clicks", "relevance_judgments")
 _VIEWS = ("search_documents", "page_geo_codes")
 _OPS = ("error_logs",)
-SECRET_TABLES = ("admin_users",)
+# Accounts, personal history and auth bookkeeping: only the API (and the jobs that purge
+# them) read these; the read-only role and the other services never do.
+_ACCOUNT_TABLES = ("users", "user_search_history", "revoked_tokens", "login_failures")
+SECRET_TABLES = ("admin_users", *_ACCOUNT_TABLES)
 
 # Everything a service may read: all tables and views except the secret ones.
 READABLE = (
@@ -99,6 +102,10 @@ PRIVILEGES: dict[str, dict[str, str]] = {
     },
     "pgs_api": {
         "admin_users": "INSERT, UPDATE",
+        "users": "INSERT, UPDATE, DELETE",
+        "user_search_history": "INSERT, DELETE",
+        "revoked_tokens": "INSERT",
+        "login_failures": "INSERT, DELETE",
         "domains": "INSERT, UPDATE",
         "region_links": "INSERT, UPDATE, DELETE",
         "local_bodies": "UPDATE",
@@ -121,13 +128,18 @@ PRIVILEGES: dict[str, dict[str, str]] = {
         "local_bodies": "UPDATE",  # fill_local_body_contacts
         "search_queries": "DELETE",  # retention
         "search_clicks": "DELETE",
+        "revoked_tokens": "DELETE",  # expired ids
+        "login_failures": "DELETE",  # old failures
         "error_logs": "INSERT, DELETE",
     },
     "pgs_readonly": {},
 }
 
 # Which roles may read the secret tables.
-SECRET_READERS = {"pgs_api": SECRET_TABLES}
+SECRET_READERS = {
+    "pgs_api": SECRET_TABLES,
+    "pgs_jobs": ("revoked_tokens", "login_failures"),
+}
 
 
 def _grant(privileges: str, table: str, role: str) -> str:

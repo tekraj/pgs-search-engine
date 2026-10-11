@@ -7,6 +7,7 @@ from ._mapping import (
     stored_file_row,
     unsigned_simhash,
 )
+from .accounts import AccountsRepository, normalize_email
 from .bronze import BronzeRepository, SaveResult
 from .ops import OpsRepository
 from .quarantine import QuarantineRepository
@@ -18,6 +19,7 @@ from .silver import SilverRepository
 from .stats import StatsRepository
 
 __all__ = [
+    "AccountsRepository",
     "BronzeRepository",
     "OpsRepository",
     "QuarantineRepository",
@@ -30,6 +32,7 @@ __all__ = [
     "StatsRepository",
     "crawl_stats_columns",
     "document_row",
+    "normalize_email",
     "normalize_query",
     "search_language",
     "signed_simhash",

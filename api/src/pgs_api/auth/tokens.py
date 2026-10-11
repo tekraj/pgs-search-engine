@@ -1,8 +1,10 @@
 """Admin access tokens: compact JWS (JWT) signed with HMAC-SHA256, standard library only.
 
 `<base64url(header)>.<base64url(claims)>.<base64url(signature)>`, header
-`{"alg": "HS256", "typ": "JWT"}`, claims `iss`, `sub` (username), `uid` (admin_users.id),
-`role`, `iat` and `exp` (Unix seconds). Verification recomputes the signature and
+`{"alg": "HS256", "typ": "JWT"}`, claims `iss`, `aud` (`admin` or `user`: a token is only
+good for its own audience), `jti` (a random id, so a sign-out can revoke the token),
+`sub` (username or email), `uid` (admin_users.id or users.id), `role`, `iat` and `exp`
+(Unix seconds). Verification recomputes the signature and
 compares it in constant time before it reads the claims, accepts HS256 only, and
 rejects expired tokens. The secret is `API_AUTH_SECRET`.
 """
@@ -15,12 +17,15 @@ import hashlib
 import hmac
 import json
 import re
+import secrets
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
 ISSUER = "pgs-api"
+ADMIN_AUDIENCE = "admin"
+USER_AUDIENCE = "user"
 MAX_TOKEN_LENGTH = 4096
 _HEADER = {"alg": "HS256", "typ": "JWT"}
 _SEGMENT = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -32,8 +37,10 @@ class TokenError(Exception):
 
 @dataclass(frozen=True)
 class TokenClaims:
-    subject: str  # admin_users.username
+    subject: str  # admin_users.username / users.email
     user_id: int
+    token_id: str
+    audience: str
     role: str
     issued_at: int
     expires_at: int
@@ -96,20 +103,30 @@ class TokenCodec:
     def _sign(self, signing_input: str) -> bytes:
         return hmac.new(self._key, signing_input.encode("ascii"), hashlib.sha256).digest()
 
-    def issue(self, *, subject: str, user_id: int, role: str) -> str:
+    def issue(
+        self,
+        *,
+        subject: str,
+        user_id: int,
+        role: str,
+        audience: str = ADMIN_AUDIENCE,
+        ttl_seconds: int | None = None,
+    ) -> str:
         now = int(self._clock())
         claims = {
             "iss": ISSUER,
+            "aud": audience,
+            "jti": secrets.token_urlsafe(16),
             "sub": subject,
             "uid": user_id,
             "role": role,
             "iat": now,
-            "exp": now + self.ttl_seconds,
+            "exp": now + (ttl_seconds or self.ttl_seconds),
         }
         signing_input = f"{_json_segment(_HEADER)}.{_json_segment(claims)}"
         return f"{signing_input}.{_b64encode(self._sign(signing_input))}"
 
-    def verify(self, token: str) -> TokenClaims:
+    def verify(self, token: str, audience: str = ADMIN_AUDIENCE) -> TokenClaims:
         if len(token) > MAX_TOKEN_LENGTH:
             raise TokenError("token too long")
         parts = token.split(".")
@@ -126,12 +143,16 @@ class TokenCodec:
         claims = _decode_object(claims_segment)
         if claims.get("iss") != ISSUER:
             raise TokenError("wrong issuer")
+        if claims.get("aud") != audience:
+            raise TokenError("wrong audience")
         expires_at = _int_claim(claims, "exp")
         if expires_at <= int(self._clock()):
             raise TokenError("token expired")
         return TokenClaims(
             subject=_str_claim(claims, "sub"),
             user_id=_int_claim(claims, "uid"),
+            token_id=_str_claim(claims, "jti"),
+            audience=audience,
             role=_str_claim(claims, "role"),
             issued_at=_int_claim(claims, "iat"),
             expires_at=expires_at,

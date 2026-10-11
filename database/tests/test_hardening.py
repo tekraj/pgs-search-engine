@@ -21,6 +21,7 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from pgs_db import (
+    AccountsRepository,
     BronzeRepository,
     OpsRepository,
     ReferenceRepository,
@@ -226,8 +227,39 @@ class TestRoles:
         refused(session, "pgs_api", lambda: session.execute(
             text("DELETE FROM pages WHERE id = :id"), {"id": page_id}))
 
+    def test_api_accounts_and_jobs_purge(self, session: Session) -> None:
+        with as_role(session, "pgs_api"):
+            accounts = AccountsRepository(session)
+            user = accounts.create_user("role@example.com", password_hash="h")
+            assert accounts.record_search(user.id, query_text="q", result_count=1)
+            assert len(accounts.list_history(user.id)) == 1
+            accounts.revoke_token("jti-1", datetime.now(UTC) - timedelta(days=1))
+            accounts.add_login_failure("ip:1|x", "acct:x")
+            assert accounts.count_login_failures("acct:x", _ANCIENT)[0] == 1
+            session.flush()
+        with as_role(session, "pgs_jobs"):
+            purged = AccountsRepository(session).purge_auth_bookkeeping(
+                now=datetime.now(UTC) + timedelta(days=2)
+            )
+            assert purged["revoked_tokens_deleted"] >= 1
+            assert purged["login_failures_deleted"] >= 2
+        refused(session, "pgs_jobs", lambda: session.execute(text("SELECT 1 FROM users")))
+        refused(
+            session,
+            "pgs_readonly",
+            lambda: session.execute(text("SELECT 1 FROM user_search_history")),
+        )
+
     def test_jobs_run_every_job(self, session: Session) -> None:
-        args = argparse.Namespace(stale_minutes=30, error_days=90, search_days=365)
+        args = argparse.Namespace(
+            stale_minutes=30,
+            error_days=90,
+            search_days=90,
+            discover_days=30,
+            discover_limit=5,
+            discover_seconds=1,
+            discover_any_content=False,
+        )
         with as_role(session, "pgs_jobs"):
             for name in jobs.JOBS:
                 report = jobs.run_job(session, name, args)

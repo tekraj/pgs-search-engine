@@ -20,7 +20,7 @@ PYTHON = "/opt/etl-venv/bin/python"
 # dag_id -> (schedule, jobs in order). Mirrors the schedule suggested in pgs_db/jobs.py.
 SCHEDULES = {
     "pgs_db_jobs_frequent": ("*/10 * * * *", ["release-stale", "stats"]),
-    "pgs_db_jobs_hourly": ("17 * * * *", ["scores"]),
+    "pgs_db_jobs_hourly": ("17 * * * *", ["scores", "discover-domains"]),
     "pgs_db_jobs_daily": ("43 2 * * *", ["reference", "purge"]),
 }
 

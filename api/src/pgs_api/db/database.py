@@ -9,15 +9,18 @@ hash. Tests replace the whole `Database` with a fake.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
 
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from pgs_db import (
+    AccountsRepository,
     OpsRepository,
     ReferenceRepository,
     SearchLogRepository,
@@ -45,8 +48,32 @@ class AdminAccount:
 
 
 @dataclass(frozen=True)
+class UserAccount:
+    """An active `users` row, detached from the session."""
+
+    id: int
+    email: str
+    display_name: str | None
+    password_hash: str
+    save_history: bool
+
+
+@dataclass(frozen=True)
+class HistoryItem:
+    id: int
+    query_text: str
+    filters: dict[str, Any]
+    result_count: int
+    searched_at: datetime
+
+
+class EmailTaken(Exception):
+    """An account with this email already exists."""
+
+
+@dataclass(frozen=True)
 class SearchLogEntry:
-    """One answered search, for `search_queries`."""
+    """One answered search, for `search_queries` (and the user's history, if signed in)."""
 
     query_text: str
     result_count: int
@@ -54,6 +81,10 @@ class SearchLogEntry:
     filters: dict[str, Any]
     page_number: int
     latency_ms: int
+    # Set when a signed-in user searched: the entry also goes into that user's history,
+    # unless they turned history off or the token (`token_id`) has been signed out.
+    user_id: int | None = None
+    token_id: str | None = None
 
 
 class Database(Protocol):
@@ -72,6 +103,38 @@ class Database(Protocol):
     def search_traffic(self, since: datetime, until: datetime) -> dict[str, Any]: ...
 
     def log_search(self, entry: SearchLogEntry) -> None: ...
+
+    def is_token_revoked(self, token_id: str) -> bool: ...
+
+    def revoke_token(self, token_id: str, expires_at: datetime) -> None: ...
+
+    def count_login_failures(self, key: str, since: datetime) -> tuple[int, datetime | None]: ...
+
+    def add_login_failures(self, keys: Sequence[str]) -> None: ...
+
+    def clear_login_failures(self, keys: Sequence[str]) -> None: ...
+
+    def find_user(self, email: str) -> UserAccount | None: ...
+
+    def get_user(self, user_id: int) -> UserAccount | None: ...
+
+    def create_user(
+        self, email: str, password_hash: str, display_name: str | None
+    ) -> UserAccount: ...
+
+    def record_user_login(self, user_id: int, new_password_hash: str | None) -> None: ...
+
+    def set_save_history(self, user_id: int, enabled: bool) -> None: ...
+
+    def list_history(
+        self, user_id: int, limit: int, before_id: int | None
+    ) -> list[HistoryItem]: ...
+
+    def delete_history_item(self, user_id: int, item_id: int) -> bool: ...
+
+    def clear_history(self, user_id: int) -> int: ...
+
+    def delete_user(self, user_id: int) -> None: ...
 
     def close(self) -> None: ...
 
@@ -143,6 +206,97 @@ class PgDatabase:
                 page_number=entry.page_number,
                 latency_ms=entry.latency_ms,
             )
+            if entry.user_id is not None:
+                AccountsRepository(session).record_search(
+                    entry.user_id,
+                    query_text=entry.query_text,
+                    result_count=entry.result_count,
+                    filters=entry.filters or None,
+                    token_id=entry.token_id,
+                )
+
+    def is_token_revoked(self, token_id: str) -> bool:
+        with self._sessions() as session:
+            return AccountsRepository(session).is_token_revoked(token_id)
+
+    def revoke_token(self, token_id: str, expires_at: datetime) -> None:
+        with self._sessions.begin() as session:
+            AccountsRepository(session).revoke_token(token_id, expires_at)
+
+    def count_login_failures(self, key: str, since: datetime) -> tuple[int, datetime | None]:
+        with self._sessions() as session:
+            return AccountsRepository(session).count_login_failures(key, since)
+
+    def add_login_failures(self, keys: Sequence[str]) -> None:
+        with self._sessions.begin() as session:
+            AccountsRepository(session).add_login_failure(*keys)
+
+    def clear_login_failures(self, keys: Sequence[str]) -> None:
+        with self._sessions.begin() as session:
+            AccountsRepository(session).clear_login_failures(*keys)
+
+    @staticmethod
+    def _account(user: Any) -> UserAccount:
+        return UserAccount(
+            id=user.id,
+            email=user.email,
+            display_name=user.display_name,
+            password_hash=user.password_hash,
+            save_history=user.save_history,
+        )
+
+    def find_user(self, email: str) -> UserAccount | None:
+        with self._sessions() as session:
+            user = AccountsRepository(session).get_user_by_email(email)
+            return None if user is None else self._account(user)
+
+    def get_user(self, user_id: int) -> UserAccount | None:
+        with self._sessions() as session:
+            user = AccountsRepository(session).get_user(user_id)
+            return None if user is None else self._account(user)
+
+    def create_user(self, email: str, password_hash: str, display_name: str | None) -> UserAccount:
+        try:
+            with self._sessions.begin() as session:
+                user = AccountsRepository(session).create_user(
+                    email, password_hash=password_hash, display_name=display_name
+                )
+                return self._account(user)
+        except IntegrityError:
+            raise EmailTaken(email) from None
+
+    def record_user_login(self, user_id: int, new_password_hash: str | None) -> None:
+        with self._sessions.begin() as session:
+            accounts = AccountsRepository(session)
+            accounts.record_login(user_id)
+            if new_password_hash is not None:
+                accounts.set_password_hash(user_id, new_password_hash)
+
+    def set_save_history(self, user_id: int, enabled: bool) -> None:
+        with self._sessions.begin() as session:
+            AccountsRepository(session).set_save_history(user_id, enabled)
+
+    def list_history(self, user_id: int, limit: int, before_id: int | None) -> list[HistoryItem]:
+        with self._sessions() as session:
+            rows = AccountsRepository(session).list_history(
+                user_id, limit=limit, before_id=before_id
+            )
+            return [
+                HistoryItem(r.id, r.query_text, r.filters or {}, r.result_count, r.searched_at)
+                for r in rows
+            ]
+
+    def delete_history_item(self, user_id: int, item_id: int) -> bool:
+        with self._sessions.begin() as session:
+            return AccountsRepository(session).delete_history_item(user_id, item_id)
+
+    def clear_history(self, user_id: int) -> int:
+        with self._sessions.begin() as session:
+            return AccountsRepository(session).clear_history(user_id)
+
+    def delete_user(self, user_id: int) -> None:
+        with self._sessions.begin() as session:
+            AccountsRepository(session).delete_user(user_id)
 
     def close(self) -> None:
         self._engine.dispose()

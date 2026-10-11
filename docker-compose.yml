@@ -444,6 +444,9 @@ services:
       # Signs admin tokens (>= 32 characters). Unset: login and /admin answer 503.
       API_AUTH_SECRET: ${API_AUTH_SECRET:-}
       API_TOKEN_TTL_SECONDS: ${API_TOKEN_TTL_SECONDS:-28800}
+      API_USER_TOKEN_TTL_SECONDS: ${API_USER_TOKEN_TTL_SECONDS:-604800}
+      API_WORKER_THREADS: ${API_WORKER_THREADS:-100}
+      API_PASSWORD_WORKERS: ${API_PASSWORD_WORKERS:-4}
       # Cross-origin browser callers (comma-separated origins); the UI needs none.
       API_CORS_ORIGINS: ${API_CORS_ORIGINS:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}

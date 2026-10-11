@@ -6,6 +6,7 @@ import logging
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 
+import anyio.to_thread
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +15,7 @@ from .core.errors import validation_error_handler
 from .core.observability import REQUEST_ID_HEADER, RequestContextMiddleware
 from .core.services import Services, build_services
 from .core.settings import Settings
-from .routers import admin, auth, geo, health, search
+from .routers import account, admin, auth, geo, health, search
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,8 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        # Routes are synchronous and run on this pool (default 40 threads).
+        anyio.to_thread.current_default_thread_limiter().total_tokens = settings.worker_threads
         services = services_factory(settings)
         app.state.services = services
         logger.info(
@@ -57,7 +60,7 @@ def create_app(
         app.add_middleware(
             CORSMiddleware,
             allow_origins=list(settings.cors_origins),
-            allow_methods=["GET", "POST"],
+            allow_methods=["GET", "POST", "PATCH", "DELETE"],
             allow_headers=["Authorization", "Content-Type", REQUEST_ID_HEADER],
             expose_headers=[REQUEST_ID_HEADER],
             max_age=600,
@@ -65,6 +68,6 @@ def create_app(
     # Added last, so outermost: every response (CORS preflights and errors too) gets an id.
     app.add_middleware(RequestContextMiddleware)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
-    for module in (health, search, geo, auth, admin):
+    for module in (health, search, geo, auth, account, admin):
         app.include_router(module.router)
     return app

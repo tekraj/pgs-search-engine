@@ -16,12 +16,39 @@ How it fits in the system: [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
 | GET | `/api/v1/geo/hierarchy` | -- | provinces -> districts -> local bodies (codes and names) |
 | GET | `/api/v1/geo/content-stats?level=province\|district\|local_body&within=` | -- | indexed-content counts per region (map colouring) from the Gold summaries |
 | POST | `/api/v1/auth/login` `{username \| email, password}` | -- | `{access_token, token_type: "bearer", expires_in, user}`; 401 bad credentials; 503 when `API_AUTH_SECRET` is not set |
+| POST | `/api/v1/auth/logout` | Bearer | 204; the token stops working at once (its id goes into `revoked_tokens`) |
 | GET | `/api/v1/auth/me` | Bearer | the signed-in admin |
+| POST | `/api/v1/account/register` `{email, password (>= 12), display_name?}` | -- | 201 `{access_token, token_type, expires_in, user: {email, display_name, save_history}}` (signed in); 409 email taken; 400 invalid |
+| POST | `/api/v1/account/login` `{email, password}` | -- | same body as register; 401 / 429 as for admins |
+| POST | `/api/v1/account/logout` | User bearer | 204; revokes the token |
+| GET | `/api/v1/account/me` | User bearer | the profile |
+| PATCH | `/api/v1/account/settings` `{save_history}` | User bearer | turn history recording on or off |
+| GET | `/api/v1/account/history?limit=50&before=` | User bearer | `{items: [{id, query, filters, result_count, searched_at}], next_before}`, newest first |
+| DELETE | `/api/v1/account/history/{id}` / `/api/v1/account/history` | User bearer | remove one entry (204, 404) / clear all (`{deleted}`) |
+| POST | `/api/v1/account/delete` `{password}` | User bearer | erase the account and its history (204) |
 | GET | `/api/v1/admin/summary` | Bearer | dashboard numbers: domains, storage/queue, quarantine, errors in the last 24 h, search traffic |
 
 Tokens are HMAC-SHA256 signed with `API_AUTH_SECRET` (>= 32 characters) and carry the
-admin's id, role and expiry (`API_TOKEN_TTL_SECONDS`, default 8 h); verification is
-constant-time and checks that the account is still active. Admin accounts live in
+account's id, role, expiry, a random id (`jti`) and an audience: `admin` tokens (default 8 h,
+`API_TOKEN_TTL_SECONDS`) only open admin routes, `user` tokens (default 7 d,
+`API_USER_TOKEN_TTL_SECONDS`) only the `/account` routes. Verification is constant-time,
+checks that the account is still active and that the token was not signed out.
+
+**Public accounts and search history.** Anyone can register at `/api/v1/account/register`
+(accounts are in `users`, apart from `admin_users`). A search sent with a user's bearer
+token is also written to that user's `user_search_history` (query, filters, result count,
+time) unless they turned `save_history` off; anonymous searches carry no account and stay
+in `search_queries` (purged after 90 days). A user can list, delete or clear their history
+and delete the account, which erases the history with it. Live suggestions in the search box
+are never saved.
+
+**Login throttle** (`login_failures`, shared by every API process): 5 failed logins per
+15 minutes from one address against one account lock out that address for that account;
+30 from anywhere pause the account. The address is nginx's `X-Real-IP`, which the UI
+forwards. Password hashes (Argon2id) run at most `API_PASSWORD_WORKERS` (4) at a time; more
+sign-ins wait up to 3 s and then get 503, so a login flood cannot occupy the route threads
+(`API_WORKER_THREADS`, default 100, sizes that pool). Email addresses are not verified and
+there is no password reset (no mail service in the stack). Admin accounts live in
 `admin_users` (argon2 hashes): `docker compose run --rm db-migrate python
 scripts/create_admin.py <username> --email <address>`.
 
@@ -35,6 +62,9 @@ scripts/create_admin.py <username> --email <address>`.
 | `SEARCH_TIMEOUT_SECONDS` | `5` (compose: 8) | gRPC deadline per search |
 | `API_AUTH_SECRET` | unset | enables login/admin; unset -> those answer 503 |
 | `API_TOKEN_TTL_SECONDS` | `28800` | token lifetime |
+| `API_USER_TOKEN_TTL_SECONDS` | `604800` | public-site user token lifetime |
+| `API_WORKER_THREADS` | `100` | threads for the synchronous routes |
+| `API_PASSWORD_WORKERS` | `4` | password hashes running at once |
 | `API_CORS_ORIGINS` | empty (no CORS) | comma-separated browser origins allowed cross-origin |
 | `LOG_LEVEL` | `INFO` | JSON logs with a request id per request; query strings are not logged |
 
