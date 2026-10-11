@@ -191,3 +191,20 @@ def test_admin_logout_revokes_the_token(harness: Harness) -> None:
     ).json()["access_token"]
     assert harness.client.post("/api/v1/auth/logout", headers=_bearer(token)).status_code == 204
     assert harness.client.get("/api/v1/auth/me", headers=_bearer(token)).status_code == 401
+
+
+def test_client_address_comes_from_the_proxy_headers(harness: Harness) -> None:
+    _register(harness)
+    bad = {"email": EMAIL, "password": "wrong password!"}
+    # Behind a gateway: only the last X-Forwarded-For entry is trusted, so a client cannot
+    # dodge the per-address limit by sending its own first entries.
+    for n in range(5):
+        headers = {"X-Forwarded-For": f"6.6.6.{n}, 7.7.7.7"}
+        assert (
+            harness.client.post("/api/v1/account/login", json=bad, headers=headers).status_code
+            == 401
+        )
+    blocked = harness.client.post(
+        "/api/v1/account/login", json=bad, headers={"X-Forwarded-For": "9.9.9.9, 7.7.7.7"}
+    )
+    assert blocked.status_code == 429

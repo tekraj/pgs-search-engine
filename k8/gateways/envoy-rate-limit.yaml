@@ -1,0 +1,49 @@
+# Envoy Gateway only (BackendTrafficPolicy is its extension, not Gateway API): per-client
+# request limits like nginx's, which the plain Gateway API cannot express.
+#   - sign-in / sign-up: 5 requests per minute per client address
+#   - search and the rest of the API: 10 requests per second per client address
+# Other controllers have their own policy kinds; replace this file if you use one.
+# Clients are told apart by source address, so make sure the load balancer in front keeps
+# the client address (externalTrafficPolicy: Local, or PROXY protocol / X-Forwarded-For
+# with ClientTrafficPolicy.clientIPDetection).
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: pgs-auth-rate-limit
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: pgs-auth
+  rateLimit:
+    type: Local
+    local:
+      rules:
+        - clientSelectors:
+            - sourceCIDR:
+                type: Distinct
+                value: 0.0.0.0/0
+          limit:
+            requests: 5
+            unit: Minute
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: pgs-api-rate-limit
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: pgs-api
+  rateLimit:
+    type: Local
+    local:
+      rules:
+        - clientSelectors:
+            - sourceCIDR:
+                type: Distinct
+                value: 0.0.0.0/0
+          limit:
+            requests: 10
+            unit: Second

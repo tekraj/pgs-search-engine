@@ -1,0 +1,30 @@
+# The API gateway (FastAPI): /api/v1/ and /health/. A search may take up to the API's
+# SEARCH_TIMEOUT_SECONDS, so the request timeout leaves room for it.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: pgs-api
+  labels:
+    app.kubernetes.io/name: pgs-gateway
+spec:
+  parentRefs:
+    - name: pgs
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: /api/v1 }
+        - path: { type: PathPrefix, value: /health }
+      timeouts:
+        request: 30s
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - { name: X-Content-Type-Options, value: nosniff }
+              - { name: X-Frame-Options, value: DENY }
+              - { name: Referrer-Policy, value: strict-origin-when-cross-origin }
+              - { name: Permissions-Policy, value: "camera=(), microphone=(), geolocation=()" }
+              - name: Content-Security-Policy
+                value: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://localboundries.oknp.org; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+      backendRefs:
+        - name: api
+          port: 8000

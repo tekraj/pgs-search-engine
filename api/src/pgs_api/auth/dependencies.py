@@ -46,10 +46,19 @@ class Principal:
 
 
 def client_ip(request: Request) -> str:
-    """The caller's address: nginx's X-Real-IP (the UI server forwards it), else the socket's."""
+    """The caller's address behind our proxy.
+
+    nginx (compose) and the UI server send X-Real-IP. A Gateway API / Envoy gateway
+    (Kubernetes) appends the peer it saw as the LAST X-Forwarded-For entry; earlier
+    entries are client-supplied, so they are ignored. Otherwise the socket's address.
+    """
     forwarded = request.headers.get("x-real-ip", "").strip()
     if forwarded:
         return forwarded[:64]
+    chain = request.headers.get("x-forwarded-for", "")
+    last = chain.rsplit(",", 1)[-1].strip()
+    if last:
+        return last[:64]
     return request.client.host if request.client else "unknown"
 
 
