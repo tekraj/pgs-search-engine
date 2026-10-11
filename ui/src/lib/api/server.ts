@@ -10,17 +10,24 @@ export type ApiResult<T> =
 interface ApiOptions {
   method?: "GET" | "POST" | "PATCH" | "DELETE";
   token?: string;
-  /** The browser's address, passed on as X-Real-IP so the API's login throttle counts the right client. */
+  /** The browser's address, passed on as X-Real-IP / X-Forwarded-For so the API's login throttle counts the right client. */
   clientIp?: string;
   body?: unknown;
   searchParams?: Record<string, string | number | undefined>;
 }
 
-/** The caller's address as nginx saw it (it sets X-Real-IP), for `clientIp`. */
+/**
+ * The caller's address, from the header CLIENT_IP_SOURCE names (the one our proxy sets or
+ * overwrites; any other is client-controlled). Pass it as `clientIp`.
+ */
 export function clientIpOf(request: Request): string | undefined {
-  const real = request.headers.get("x-real-ip")?.trim();
-  if (real) return real;
-  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || undefined;
+  const source = serverEnv().clientIpSource;
+  if (source === "x-real-ip") return request.headers.get("x-real-ip")?.trim() || undefined;
+  if (source === "x-forwarded-for") {
+    // One proxy hop appends the address it saw as the last entry.
+    return request.headers.get("x-forwarded-for")?.split(",").at(-1)?.trim() || undefined;
+  }
+  return undefined;
 }
 
 /** For endpoints that answer 204 No Content: the body is null. */
@@ -38,7 +45,11 @@ export async function apiFetch<T>(
     if (value !== undefined && value !== "") url.searchParams.set(name, String(value));
   }
   const headers: Record<string, string> = { Accept: "application/json" };
-  if (options.clientIp) headers["X-Real-IP"] = options.clientIp;
+  if (options.clientIp) {
+    // Both, so the API finds it whichever API_CLIENT_IP_SOURCE it trusts.
+    headers["X-Real-IP"] = options.clientIp;
+    headers["X-Forwarded-For"] = options.clientIp;
+  }
   if (options.token) headers.Authorization = `Bearer ${options.token}`;
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
 

@@ -108,8 +108,7 @@ if the Gateway gets no address. Routes: exact sign-in / sign-up paths (`pgs-auth
 limited), `/api/v1` and `/health` (`pgs-api`), everything else (`pgs-ui`). The security headers
 nginx set (CSP, nosniff, ...) are set by a standard `ResponseHeaderModifier` filter on each
 route. Rate limiting is not part of Gateway API: `gateways/envoy-rate-limit.yaml` covers it
-for Envoy Gateway only (use your controller's policy kind otherwise). The API reads the client address from `X-Real-IP`, else the
-last `X-Forwarded-For` entry, which a single proxy hop (the gateway) appends.
+for Envoy Gateway only (use your controller's policy kind otherwise). The API and UI manifests set `API_CLIENT_IP_SOURCE` / `CLIENT_IP_SOURCE` to `x-forwarded-for`: the last entry, which a single proxy hop (the gateway) appends. `X-Real-IP` is client-controlled there and is ignored.
 
 ## Access from the host
 

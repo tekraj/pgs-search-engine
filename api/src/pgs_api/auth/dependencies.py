@@ -45,20 +45,21 @@ class Principal:
     token_expires_at: int = 0
 
 
-def client_ip(request: Request) -> str:
-    """The caller's address behind our proxy.
+def client_ip(request: Request, services: ServicesDep) -> str:
+    """The caller's address, read from the header API_CLIENT_IP_SOURCE says our proxy sets.
 
-    nginx (compose) and the UI server send X-Real-IP. A Gateway API / Envoy gateway
-    (Kubernetes) appends the peer it saw as the LAST X-Forwarded-For entry; earlier
-    entries are client-supplied, so they are ignored. Otherwise the socket's address.
+    A header the proxy does not overwrite is client-controlled and would let an attacker
+    dodge the per-address login limit, so only the configured one is read.
     """
-    forwarded = request.headers.get("x-real-ip", "").strip()
-    if forwarded:
-        return forwarded[:64]
-    chain = request.headers.get("x-forwarded-for", "")
-    last = chain.rsplit(",", 1)[-1].strip()
-    if last:
-        return last[:64]
+    source = services.settings.client_ip_source
+    value = ""
+    if source == "x-real-ip":
+        value = request.headers.get("x-real-ip", "").strip()
+    elif source == "x-forwarded-for":
+        # One proxy hop appends the address it saw as the LAST entry.
+        value = request.headers.get("x-forwarded-for", "").rsplit(",", 1)[-1].strip()
+    if value:
+        return value[:64]
     return request.client.host if request.client else "unknown"
 
 
