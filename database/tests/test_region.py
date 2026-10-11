@@ -39,6 +39,22 @@ class TestHierarchy:
         kaski = next(d for d in gandaki.districts if d.code == KASKI)
         assert POKHARA in [lb.code for lb in kaski.local_bodies]
 
+    def test_every_region_has_a_valid_parent(self, ref: ReferenceRepository) -> None:
+        tree = [ProvinceNode.model_validate(p) for p in ref.hierarchy()]
+
+        province_codes = {province.code for province in tree}
+        district_codes = {
+            district.code
+            for province in tree
+            for district in province.districts
+        }
+
+        for province in tree:
+            for district in province.districts:
+                assert district.province_code in province_codes
+
+                for local_body in district.local_bodies:
+                    assert local_body.district_code in district_codes
 
 class TestRegionalCard:
     def test_a_local_body_card_has_contacts_parents_and_links_in_order(

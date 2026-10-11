@@ -47,7 +47,6 @@ class DistrictBase(SchemaBase):
         pattern=r"^D(?:0[1-9]|[1-6][0-9]|7[0-7])$",
         description="District code from D01 through D77",
     )
-
     province_code: str = Field(
         pattern=r"^P[1-7]$",
         description="Code of the province containing the district",
@@ -71,25 +70,13 @@ class DistrictCreate(DistrictBase):
 class DistrictUpdate(SchemaBase):
     """Fields that may be changed for an existing district."""
 
-    province_code: str | None = Field(
-        default=None,
-        pattern=r"^P[1-7]$",
-    )
-    name_en: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=100,
-    )
-    name_ne: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=100,
-    )
+    province_code: str | None = Field(default=None, pattern=r"^P[1-7]$")
+    name_en: str | None = Field(default=None, min_length=1, max_length=100)
+    name_ne: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class DistrictRead(DistrictBase, ReadSchema):
     """District data returned by the application."""
-
 
 
 class LocalBodyBase(SchemaBase):
