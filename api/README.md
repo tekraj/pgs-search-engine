@@ -44,7 +44,7 @@ are never saved.
 
 **Login throttle** (`login_failures`, shared by every API process): 5 failed logins per
 15 minutes from one address against one account lock out that address for that account;
-30 from anywhere pause the account. The address is nginx's `X-Real-IP`, which the UI
+30 from anywhere pause the account. The address comes from the header `API_CLIENT_IP_SOURCE` names (nginx's `X-Real-IP` by default), which the UI
 forwards. Password hashes (Argon2id) run at most `API_PASSWORD_WORKERS` (4) at a time; more
 sign-ins wait up to 3 s and then get 503, so a login flood cannot occupy the route threads
 (`API_WORKER_THREADS`, default 100, sizes that pool). Email addresses are not verified and
@@ -65,6 +65,7 @@ scripts/create_admin.py <username> --email <address>`.
 | `API_USER_TOKEN_TTL_SECONDS` | `604800` | public-site user token lifetime |
 | `API_WORKER_THREADS` | `100` | threads for the synchronous routes |
 | `API_PASSWORD_WORKERS` | `4` | password hashes running at once |
+| `API_CLIENT_IP_SOURCE` | `x-real-ip` | which proxy header names the client for the login throttle: `x-real-ip` (nginx), `x-forwarded-for` (last entry; Traefik / Gateway) or `socket`. Trust only a header your proxy sets or overwrites |
 | `API_CORS_ORIGINS` | empty (no CORS) | comma-separated browser origins allowed cross-origin |
 | `LOG_LEVEL` | `INFO` | JSON logs with a request id per request; query strings are not logged |
 

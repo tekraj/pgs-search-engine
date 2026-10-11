@@ -34,6 +34,9 @@ spec:
           env:
             - { name: API_INTERNAL_URL, value: "http://api:8000" }
             - { name: API_TIMEOUT_MS, value: "10000" }
+            # Behind the Ingress / Gateway (no nginx): the last X-Forwarded-For entry is the
+            # client. The login throttle trusts this; see api/README.md.
+            - { name: CLIENT_IP_SOURCE, value: "x-forwarded-for" }
           readinessProbe:
             httpGet:
               path: /

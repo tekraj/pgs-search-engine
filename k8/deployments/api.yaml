@@ -68,6 +68,9 @@ spec:
             - name: DB_APPLICATION_NAME
               value: pgs-api
             - { name: SEARCH_TIMEOUT_SECONDS, value: "8" }
+            # Behind the Ingress / Gateway (no nginx): the last X-Forwarded-For entry is the
+            # client address the login throttle counts.
+            - { name: API_CLIENT_IP_SOURCE, value: "x-forwarded-for" }
             - name: API_AUTH_SECRET
               valueFrom:
                 secretKeyRef: { name: pgs-secrets, key: API_AUTH_SECRET, optional: true }
@@ -90,4 +93,4 @@ spec:
             capabilities: { drop: ["ALL"] }
           resources:
             requests: { cpu: 100m, memory: 128Mi }
-            limits: { memory: 512Mi }
+            limits: { memory: 768Mi }  # 4 concurrent Argon2 hashes use ~64 MiB each

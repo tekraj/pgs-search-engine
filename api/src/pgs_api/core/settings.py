@@ -29,6 +29,7 @@ ENV_VARS: dict[str, str] = {
     "API_USER_TOKEN_TTL_SECONDS": "user_token_ttl_seconds",
     "API_WORKER_THREADS": "worker_threads",
     "API_PASSWORD_WORKERS": "password_workers",
+    "API_CLIENT_IP_SOURCE": "client_ip_source",
     "API_CORS_ORIGINS": "cors_origins",
     "LOG_LEVEL": "log_level",
 }
@@ -64,6 +65,11 @@ class Settings(BaseModel):
     # Password hashes (Argon2id: ~64 MiB and tens of ms each) running at once. More wait up
     # to 3 s for a slot, then get 503, so a login flood cannot occupy every route thread.
     password_workers: int = Field(default=4, ge=1, le=64)
+    # Which proxy header names the real client, for the per-address login throttle. Only
+    # trust a header your own proxy sets or overwrites: "x-real-ip" (nginx, the compose
+    # default), "x-forwarded-for" (the LAST entry, appended by one proxy hop such as
+    # Traefik or a Gateway; earlier entries are client-supplied), or "socket" (none).
+    client_ip_source: Literal["x-real-ip", "x-forwarded-for", "socket"] = "x-real-ip"
     # Browser origins allowed to call the API cross-origin. Empty: no CORS headers at all
     # (the UI goes through nginx on the same origin, or calls the API server-side).
     cors_origins: tuple[str, ...] = ()

@@ -1,0 +1,34 @@
+# The web entry point (replaces nginx/default.conf in compose): one Gateway API Gateway on
+# port 80. TLS is normally terminated in front of this (a cloud load balancer); to terminate
+# it here instead, add the HTTPS listener below and a kubernetes.io/tls Secret.
+#
+# Gateway API is not built into Kubernetes: install its CRDs and a controller first (see
+# k8/README.md, "Gateway API"). `gatewayClassName` must name the class your controller
+# installs: `eg` for Envoy Gateway's quickstart (the default here).
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: pgs
+  labels:
+    app.kubernetes.io/name: pgs-gateway
+spec:
+  gatewayClassName: eg
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same
+    # - name: https
+    #   protocol: HTTPS
+    #   port: 443
+    #   hostname: pgs.example.org
+    #   tls:
+    #     mode: Terminate
+    #     certificateRefs:
+    #       - kind: Secret
+    #         name: pgs-tls
+    #   allowedRoutes:
+    #     namespaces:
+    #       from: Same

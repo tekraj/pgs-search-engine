@@ -78,6 +78,7 @@ whole block, then `kubectl apply -k k8/`.
 | `scraper` | LocalStack S3 (+ browser), headless Chrome (with a NetworkPolicy keeping it off the cluster network), crawler worker, documents API |
 | `scraper-sharded` | with `scraper`: three host-sharded workers (StatefulSet) instead of the worker Deployment; also uncomment the `patches:` block |
 | `ui` | Next.js UI |
+| `gateway` | Gateway API entry point: a `Gateway` plus `HTTPRoute`s that send `/api/v1/` and `/health/` to the API and the rest to the UI (needs the `ui` block; see below) |
 | `tools` | OpenSearch Dashboards |
 
 Temporal (with its own PostgreSQL and UI) and the Spark cluster are part of the default stack:
@@ -85,6 +86,29 @@ both the crawl and the ETL run on them. Airflow's `scraper_crawl_schedule` DAG s
 a one-off crawl is a Job in `jobs/on-demand/` (`kubectl create -f`):
 `SEEDS=https://example.gov.np envsubst < k8/jobs/on-demand/scraper-crawl.yaml.tmpl | kubectl create -f -`
 (or `make k8s-crawl SEEDS=...` in `scraper/`).
+
+## Gateway API (web entry point)
+
+The Ingress API is frozen and the community ingress-nginx controller is retired; the
+Gateway API is its successor, so the entry point here is a `Gateway` and `HTTPRoute`s
+(`gateways/`, `httproutes/`). Gateway API is not part of Kubernetes itself: install the CRDs
+and one controller once per cluster, then enable the `gateway` block.
+
+```bash
+# 1. CRDs + Envoy Gateway (a controller; others work too, then set gatewayClassName in gateways/pgs.yaml)
+helm install eg oci://docker.io/envoyproxy/gateway-helm --version v1.5.0 -n envoy-gateway-system --create-namespace
+kubectl apply -f https://github.com/envoyproxy/gateway/releases/download/v1.5.0/quickstart.yaml -n default   # creates GatewayClass "eg"
+# 2. uncomment the `gateway` block in kustomization.yaml (and `ui`), then
+kubectl apply -k k8/
+kubectl -n pgs-search-engine get gateway pgs        # ADDRESS appears when the load balancer is ready
+```
+
+Docker Desktop: `kubectl -n envoy-gateway-system port-forward svc/<envoy service> 8080:80`
+if the Gateway gets no address. Routes: exact sign-in / sign-up paths (`pgs-auth`, rate
+limited), `/api/v1` and `/health` (`pgs-api`), everything else (`pgs-ui`). The security headers
+nginx set (CSP, nosniff, ...) are set by a standard `ResponseHeaderModifier` filter on each
+route. Rate limiting is not part of Gateway API: `gateways/envoy-rate-limit.yaml` covers it
+for Envoy Gateway only (use your controller's policy kind otherwise). The API and UI manifests set `API_CLIENT_IP_SOURCE` / `CLIENT_IP_SOURCE` to `x-forwarded-for`: the last entry, which a single proxy hop (the gateway) appends. `X-Real-IP` is client-controlled there and is ignored.
 
 ## Access from the host
 
@@ -136,6 +160,6 @@ k8/
 - No replication or failover: one PostgreSQL, Kafka, OpenSearch and Temporal each.
 - Shared volumes (`airflow-logs`, `etl-models`, `search-models`) rely on all pods being on
   one node; on a multi-node cluster use a ReadWriteMany storage class or remote task logs.
-- No Ingress, autoscaling or backups; the only NetworkPolicy is Chrome's (it needs a CNI that
+- No autoscaling or backups (the entry point is the optional `gateway` block); the only NetworkPolicy is Chrome's (it needs a CNI that
   enforces them). The PostgreSQL schema stays owned by
   the `pgs-db` migrations; the scraper has no migrations of its own.

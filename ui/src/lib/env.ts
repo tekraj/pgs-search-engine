@@ -6,6 +6,9 @@
  *   reaches it. The browser never calls it directly.
  * - API_TIMEOUT_MS (default 8000): per-request timeout for those calls. Keep it above the
  *   API's SEARCH_TIMEOUT_SECONDS so the API's own 504 reaches the page.
+ * - CLIENT_IP_SOURCE (default x-real-ip): which proxy header names the real client for the
+ *   API's login throttle: x-real-ip (nginx), x-forwarded-for (the last entry, one proxy hop
+ *   such as Traefik or a Gateway) or socket (none). Trust only a header your proxy sets.
  * - SESSION_COOKIE_SECURE (default auto): auto marks the session cookie Secure when the
  *   request came in over https (X-Forwarded-Proto from nginx, or the URL); always/never
  *   force it.
@@ -16,13 +19,17 @@
 
 export type CookieSecureMode = "auto" | "always" | "never";
 
+export type ClientIpSource = "x-real-ip" | "x-forwarded-for" | "socket";
+
 export interface ServerEnv {
+  clientIpSource: ClientIpSource;
   apiInternalUrl: string;
   apiTimeoutMs: number;
   cookieSecure: CookieSecureMode;
 }
 
 const DEFAULTS: ServerEnv = {
+  clientIpSource: "x-real-ip",
   apiInternalUrl: "http://api:8000",
   apiTimeoutMs: 8000,
   cookieSecure: "auto",
@@ -69,10 +76,20 @@ export function readServerEnv(env: Record<string, string | undefined> = process.
     }
   }
 
+  let clientIpSource = DEFAULTS.clientIpSource;
+  const rawIp = env.CLIENT_IP_SOURCE?.trim().toLowerCase();
+  if (rawIp) {
+    if (rawIp === "x-real-ip" || rawIp === "x-forwarded-for" || rawIp === "socket") {
+      clientIpSource = rawIp;
+    } else {
+      problems.push("CLIENT_IP_SOURCE must be x-real-ip, x-forwarded-for or socket");
+    }
+  }
+
   if (problems.length > 0) {
     throw new Error(`Invalid UI server configuration: ${problems.join("; ")}`);
   }
-  return { apiInternalUrl, apiTimeoutMs, cookieSecure };
+  return { apiInternalUrl, apiTimeoutMs, cookieSecure, clientIpSource };
 }
 
 let cached: ServerEnv | undefined;
