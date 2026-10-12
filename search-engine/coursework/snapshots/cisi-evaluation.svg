@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="570" viewBox="0 0 1000 570" role="img" aria-labelledby="title description">
+  <title id="title">CISI TF-IDF retrieval evaluation</title>
+  <desc id="description">Run results for 1,460 CISI documents and query 1, with retrieval metrics and the five highest-ranked documents.</desc>
+  <rect width="1000" height="570" rx="10" fill="#111820"/>
+  <path d="M10 0h980a10 10 0 0 1 10 10v42H0V10A10 10 0 0 1 10 0Z" fill="#202c37"/>
+  <circle cx="25" cy="26" r="6" fill="#ee6a5f"/>
+  <circle cx="47" cy="26" r="6" fill="#f5bf4f"/>
+  <circle cx="69" cy="26" r="6" fill="#61c454"/>
+  <text x="500" y="31" text-anchor="middle" fill="#d7e0e8" font-family="Consolas, 'Courier New', monospace" font-size="14">CISI IR | TF-IDF cosine retrieval</text>
+  <text x="36" y="91" fill="#8bd5ca" font-family="Consolas, 'Courier New', monospace" font-size="15">$ python search-engine/coursework/cisi_ir.py --top-k 5 --query-id 1</text>
+  <text x="36" y="126" fill="#e2e8ef" font-family="Consolas, 'Courier New', monospace" font-size="15">Indexed 1460 documents; vocabulary=90761 features; queries=112.</text>
+  <text x="36" y="166" fill="#f5c86b" font-family="Consolas, 'Courier New', monospace" font-size="15">Evaluation (all queries with relevance judgments):</text>
+  <text x="54" y="196" fill="#d7e0e8" font-family="Consolas, 'Courier New', monospace" font-size="14">MAP  0.1949</text>
+  <text x="235" y="196" fill="#d7e0e8" font-family="Consolas, 'Courier New', monospace" font-size="14">MRR  0.5820</text>
+  <text x="416" y="196" fill="#d7e0e8" font-family="Consolas, 'Courier New', monospace" font-size="14">P@5  0.3500</text>
+  <text x="597" y="196" fill="#d7e0e8" font-family="Consolas, 'Courier New', monospace" font-size="14">Recall@5  0.0836</text>
+  <text x="822" y="196" fill="#d7e0e8" font-family="Consolas, 'Courier New', monospace" font-size="14">q=76</text>
+  <path d="M36 218h928" stroke="#34424e"/>
+  <text x="36" y="250" fill="#f5c86b" font-family="Consolas, 'Courier New', monospace" font-size="14">Query 1: What problems and concerns are there in making up descriptive titles? ...</text>
+  <text x="36" y="286" fill="#8bd5ca" font-family="Consolas, 'Courier New', monospace" font-size="13">RANK   SCORE   DOC ID   TOP RESULT</text>
+  <text x="36" y="321" fill="#d7e0e8" font-family="Consolas, 'Courier New', monospace" font-size="13">1      0.0844    1281   Relative Effectiveness of Document Titles and Abstracts...</text>
+  <text x="36" y="354" fill="#d7e0e8" font-family="Consolas, 'Courier New', monospace" font-size="13">2      0.0835     722   Information Transfer Limitations of Titles...</text>
+  <text x="36" y="387" fill="#d7e0e8" font-family="Consolas, 'Courier New', monospace" font-size="13">3      0.0723    1299   Current Physics Information</text>
+  <text x="36" y="420" fill="#d7e0e8" font-family="Consolas, 'Courier New', monospace" font-size="13">4      0.0683     447   A Note on the Concept of Relevance</text>
+  <text x="36" y="453" fill="#d7e0e8" font-family="Consolas, 'Courier New', monospace" font-size="13">5      0.0659     429   The Information Content of Titles in Engineering Literature</text>
+  <path d="M36 480h928" stroke="#34424e"/>
+  <text x="36" y="515" fill="#93a4b3" font-family="Consolas, 'Courier New', monospace" font-size="12">Official CISI collection | 76 judged queries | first run cached locally</text>
+</svg>

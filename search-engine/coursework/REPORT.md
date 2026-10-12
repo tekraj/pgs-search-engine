@@ -78,6 +78,8 @@ number of displayed results and the P@N/Recall@N cutoff.
 
 The following snapshot is from `--top-k 5 --query-id 1`:
 
+![Visual snapshot of CISI evaluation results](snapshots/cisi-evaluation.svg)
+
 ```text
 Indexed 1460 documents; vocabulary=90761 features; queries=112.
 
